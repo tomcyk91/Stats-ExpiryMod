@@ -1,4 +1,4 @@
-#nullable disable
+﻿#nullable disable
 using System.Collections.Generic;
 
 namespace SmartExpiration
@@ -10,7 +10,7 @@ namespace SmartExpiration
     /// </summary>
     internal static class SEProfiler
     {
-        public static bool Enabled = true;
+        public static bool Enabled = false; // PROFILER WYLACZONY w wersji finalnej (zero kosztu).
         private static BepInEx.Logging.ManualLogSource _log;
         private static readonly Dictionary<string, double> _acc = new Dictionary<string, double>();
         private static readonly Dictionary<string, int> _calls = new Dictionary<string, int>();
@@ -39,6 +39,11 @@ namespace SmartExpiration
         private static float _worstFrameMs;
         private static int _hitchFrames;
         private static int _frameCount;
+        private static int _lastGc0;
+        private static long _lastMem;
+        // Liczniki obiektow tworzonych przez mod (renderowane co klatke przez GPU).
+        public static int MarkerCount = 0;
+        public static int BoxTextCount = 0;
 
         public static void EndFrame()
         {
@@ -54,7 +59,14 @@ namespace SmartExpiration
             _lastReport = now;
 
             // Naglowek: stan klatek niezaleznie od moda - od razu widac czy to ten mod czy nie.
-            _log.LogInfo($"[SEprof] KLATKI 2s: najgorsza={_worstFrameMs:F1}ms, hitche(>33ms)={_hitchFrames}/{_frameCount}");
+            // GC: jezeli gen0 rosnie szybko -> winowajca to alokacje (garbage), nie czas CPU w sekcjach.
+            int gc0 = System.GC.CollectionCount(0);
+            long mem = System.GC.GetTotalMemory(false);
+            int dgc0 = gc0 - _lastGc0;
+            double dMemMb = (mem - _lastMem) / (1024.0 * 1024.0);
+            _lastGc0 = gc0; _lastMem = mem;
+
+            _log.LogInfo($"[SEprof] KLATKI 2s: najgorsza={_worstFrameMs:F1}ms, hitche(>33ms)={_hitchFrames}/{_frameCount}, GC0={dgc0}, dMem={dMemMb:F1}MB, markery={MarkerCount}, boxTexty={BoxTextCount}");
 
             if (_acc.Count > 0)
             {

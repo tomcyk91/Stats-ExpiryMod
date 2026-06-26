@@ -1,7 +1,6 @@
 ﻿using HarmonyLib;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using UnityEngine;
 
 namespace SmartExpiration.Patches
@@ -9,7 +8,6 @@ namespace SmartExpiration.Patches
     [HarmonyPatch(typeof(DisplaySlot))]
     internal static class DisplaySlotPatches
     {
-
         public static bool Prepare()
         {
             return AccessTools.Method(typeof(DisplaySlot), "TakeProductFromDisplay") != null &&
@@ -25,16 +23,15 @@ namespace SmartExpiration.Patches
                 ExpirationManager.SyncShelf(__instance);
 
                 var products = ExpirationSaveManager.GetSortedProducts(__instance.transform);
-                if (products.Count > 0)
+                if (products != null && products.Count > 0)
                 {
-                    var lastP = products.Last();
+                    // C2 FIX: Indeksowanie bezpośrednie bez uzywania metod rozszerzających z System.Linq
+                    var lastP = products[products.Count - 1];
                     if (lastP != null)
                     {
                         var comp = lastP.GetComponent<ProductExpirationComponent>();
                         if (comp != null)
                         {
-                            // Enqueue date from shelf so EnsureExpiration can apply it to the taken product.
-                            // To avoid "leak" back into boxes, BoxPatches.AddProduct_Prefix ignores products coming from DisplaySlot.
                             BoxLabelPatch.EnqueueClipboardDate(comp.ExpirationDay);
                             StatisticMod.Plugin.DebugLog($"[DisplaySlot] Enqueued date from shelf: {comp.ExpirationDay}");
                         }
@@ -61,15 +58,14 @@ namespace SmartExpiration.Patches
             try
             {
                 ExpirationManager.SyncShelf(__instance);
-
                 var heldLabel = BoxLabelPatch.HeldBoxLabel;
+
                 if (heldLabel != null && heldLabel.BoxKey > 0)
                 {
                     int boxKey = heldLabel.BoxKey;
 
-                    if (ExpirationSaveManager.runtimeBoxDates.TryGetValue(boxKey, out List<int> dates) && dates.Count > 0)
+                    if (ExpirationSaveManager.runtimeBoxDates.TryGetValue(boxKey, out List<int> dates) && dates != null && dates.Count > 0)
                     {
-                        // zamiast ustawiać ClipboardDate bezpośrednio, enqueujemy datę z kartonu
                         int dateToUse = dates[0];
                         BoxLabelPatch.EnqueueClipboardDate(dateToUse);
                         StatisticMod.Plugin.DebugLog($"[DisplaySlot] Enqueued date from held box (boxKey={boxKey}): {dateToUse}");
@@ -90,12 +86,15 @@ namespace SmartExpiration.Patches
             try
             {
                 var products = ExpirationSaveManager.GetSortedProducts(__instance.transform);
-
-                foreach (var p in products)
+                if (products != null)
                 {
-                    if (p != null && p.GetComponent<ProductExpirationComponent>() == null)
+                    for (int i = 0; i < products.Count; i++)
                     {
-                        ExpirationManager.EnsureExpiration(p, __instance);
+                        var p = products[i];
+                        if (p != null && p.GetComponent<ProductExpirationComponent>() == null)
+                        {
+                            ExpirationManager.EnsureExpiration(p, __instance);
+                        }
                     }
                 }
 

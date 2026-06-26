@@ -42,6 +42,7 @@ namespace SmartExpiration.Patches
             textObj.transform.localRotation = Quaternion.Euler(30f, 0f, 0f);
 
             _textMesh = textObj.AddComponent<TextMeshPro>();
+            SmartExpiration.SEProfiler.BoxTextCount++;
             _textMesh.alignment = TextAlignmentOptions.Center;
             _textMesh.fontSize = 4f;
             _textMesh.rectTransform.sizeDelta = new Vector2(10f, 4f);
@@ -79,13 +80,24 @@ namespace SmartExpiration.Patches
 
         void Update()
         {
-            // ⚡ ATOMOWA OPTYMALIZACJA: Karton odświeża logikę tylko 2 razy na sekundę!
+            // ⚡ Karton odświeża logikę tylko 2 razy na sekundę.
             _tickTimer += Time.deltaTime;
             if (_tickTimer < 0.5f) return;
             // Zapobiega przeliczaniu wszystkich kartonów w tej samej klatce:
             _tickTimer = UnityEngine.Random.Range(0f, 0.1f);
 
             if (_box == null || _box.ProductCount <= 0) return;
+
+            // PERF: CULLING PO ODLEGLOSCI - daleki karton nie wykonuje ciezkiej inicjalizacji/logiki.
+            // Eliminuje koszt indywidualnego Update() przy 2000+ kartonach w magazynie. (sqrMagnitude wg zasad)
+            {
+                var __ptf = SmartExpiration.Patches.BoxLabelGlobalUpdater.PlayerTransform;
+                if (__ptf != null)
+                {
+                    Vector3 __d = transform.position - __ptf.position;
+                    if (__d.sqrMagnitude > 81f) return; // 9m * 9m
+                }
+            }
 
             int productId = GetProductId();
             if (productId <= 0) return;
@@ -233,6 +245,7 @@ namespace SmartExpiration.Patches
         void OnDestroy()
         {
             BoxLabelPatch.AllLabels.Remove(this);
+            if (SmartExpiration.SEProfiler.BoxTextCount > 0) SmartExpiration.SEProfiler.BoxTextCount--;
 
             if (BoxKey > 0)
             {

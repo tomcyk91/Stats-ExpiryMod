@@ -5,6 +5,7 @@ using System;
 using System.Linq;
 using System.Reflection;
 using System.Collections.Generic;
+using Il2CppInterop.Runtime.InteropTypes.Arrays;
 
 namespace SmartExpiration
 {
@@ -14,12 +15,12 @@ namespace SmartExpiration
         private static Sprite _iconSprite;
         private static DisplaySlot[] _cachedSlots = new DisplaySlot[0];
         private static float _cacheTimer = 0f;
-        // PERF: dirty-check po liczbie dzieci slotu - pomijamy ciezki skan GetComponents na polkach bez zmian.
         private static readonly Dictionary<int, int> _slotChildCounts = new Dictionary<int, int>();
         private static int _lastScanDay = -1;
+        private static int _batchCursor = 0;
+        private const int BatchSize = 12;
 
         public static List<Transform> ActiveMarkers = new List<Transform>();
-        // PERF: cache LineRenderer per marker - wczesniej GetComponent<LineRenderer> lecial CO KLATKE na kazdym markerze.
         private static readonly Dictionary<Transform, LineRenderer> _markerLineRenderers = new Dictionary<Transform, LineRenderer>();
         private static float _animTime = 0f;
 
@@ -35,9 +36,14 @@ namespace SmartExpiration
                 using var stream = assembly.GetManifestResourceStream(resourceName);
                 byte[] ba = new byte[stream.Length];
                 stream.Read(ba, 0, ba.Length);
+
                 Texture2D tex = new Texture2D(2, 2);
-                ImageConversion.LoadImage(tex, ba);
+                tex.hideFlags = HideFlags.DontUnloadUnusedAsset; // A5 FIX
+
+                ImageConversion.LoadImage(tex, (Il2CppStructArray<byte>)ba); // A6 FIX
+
                 _iconSprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+                _iconSprite.hideFlags = HideFlags.HideAndDontSave; // A5 FIX
                 return _iconSprite;
             }
             catch { return null; }
@@ -48,6 +54,7 @@ namespace SmartExpiration
             try
             {
                 var root = new GameObject("ExpiryExclamation");
+                SEProfiler.MarkerCount++;
                 root.transform.SetParent(parent.transform, false);
 
                 root.transform.localPosition = new Vector3(0.01f, 0.005f, -0.12f);
@@ -62,14 +69,18 @@ namespace SmartExpiration
                 if (shader != null)
                 {
                     var mat = new Material(shader);
+                    mat.hideFlags = HideFlags.DontUnloadUnusedAsset; // A5 FIX: Ochrona materiału
                     mat.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.Always);
                     renderer.material = mat;
                 }
 
-                Shader lineShader = Shader.Find("UI/Default") ?? Shader.Find("Sprites/Default");
+                // A4 FIX: Wyplenienie operatora ?? na obiektach Unity
+                Shader lineShader = Shader.Find("UI/Default");
+                if (lineShader == null) lineShader = Shader.Find("Sprites/Default");
                 if (lineShader == null) lineShader = Shader.Find("Universal Render Pipeline/Unlit");
 
                 Material lineMat = new Material(lineShader);
+                lineMat.hideFlags = HideFlags.DontUnloadUnusedAsset; // A5 FIX
                 lineMat.renderQueue = 4000;
                 lineMat.SetInt("_ZTest", 8);
                 lineMat.SetInt("_ZWrite", 0);
@@ -113,72 +124,85 @@ namespace SmartExpiration
             if (_refreshTimer > 0) return;
             _refreshTimer = 2.0f;
             long __pf = SEProfiler.Begin();
-            try {
-
-            // PERF: wspoldzielony cache zamiast wlasnego skanu sceny.
-            _cachedSlots = SceneSlotCache.GetSlots();
-
-            int currentDay = DayCycleManager.Instance != null ? DayCycleManager.Instance.CurrentDay : 1;
-            bool showTriangles = PluginConfig.ShowWarningTriangles != null && PluginConfig.ShowWarningTriangles.Value;
-
-            // PERF/poprawnosc: przy zmianie dnia ExpirationDay-currentDay maleje, wiec polka moze stac sie
-            // krytyczna bez zmiany liczby dzieci. Zerujemy dirty-cache raz na dzien, by przeskanowac wszystko.
-            if (currentDay != _lastScanDay)
+            try
             {
-                _lastScanDay = currentDay;
-                _slotChildCounts.Clear();
-            }
+                _cachedSlots = SceneSlotCache.GetSlots();
 
-            // Gdy triangles wylaczone - nie skanujemy w ogole produktow; sciagamy istniejace markery i konczymy.
-            foreach (var slot in _cachedSlots)
-            {
-                if (slot == null || !slot.HasProduct) continue;
+                // C5 FIX: Bezpieczny odczyt natywnego singletona dnia
+                var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
+                int currentDay = dcm != null ? dcm.CurrentDay : 1;
 
-                int instanceId = slot.GetInstanceID();
-                int currentChildren = slot.transform.childCount;
+                bool showTriangles = PluginConfig.ShowWarningTriangles != null && PluginConfig.ShowWarningTriangles.Value;
 
-                // PERF: jezeli liczba produktow na polce sie nie zmienila od ostatniego razu,
-                // stan krytycznosci tez sie nie zmienil -> pomijamy caly ciezki skan GetComponents.
-                // (Uplyw dni obslugiwany osobno: cache czyscimy raz dziennie nizej.)
-                int prevChildren;
-                bool unchanged = _slotChildCounts.TryGetValue(instanceId, out prevChildren) && prevChildren == currentChildren;
-                if (unchanged) continue;
-                _slotChildCounts[instanceId] = currentChildren;
-
-                var labelComponent = slot.GetComponentInChildren<Label>();
-                if (labelComponent == null) continue;
-
-                Transform anchor = labelComponent.transform;
-                var marker = anchor.Find("ExpiryExclamation");
-
-                bool isCritical = false;
-
-                if (showTriangles)
+                if (currentDay != _lastScanDay)
                 {
-                    var products = slot.GetComponentsInChildren<global::Product>();
-                    for (int i = 0; i < products.Count; i++)
+                    _lastScanDay = currentDay;
+                    _slotChildCounts.Clear();
+                    _batchCursor = 0;
+                }
+
+                int total = _cachedSlots != null ? _cachedSlots.Length : 0;
+                if (total == 0) return;
+                if (_batchCursor >= total) _batchCursor = 0;
+
+                int examined = 0;
+                int processed = 0;
+                int idx = _batchCursor;
+
+                while (examined < total && processed < BatchSize)
+                {
+                    var slot = _cachedSlots[idx];
+                    idx++; if (idx >= total) idx = 0;
+                    examined++;
+
+                    if (slot == null || !slot.HasProduct) continue;
+
+                    int instanceId = slot.GetInstanceID();
+                    int currentChildren = slot.transform.childCount;
+
+                    int prevChildren;
+                    bool unchanged = _slotChildCounts.TryGetValue(instanceId, out prevChildren) && prevChildren == currentChildren;
+                    if (unchanged) continue;
+                    _slotChildCounts[instanceId] = currentChildren;
+                    processed++;
+
+                    var labelComponent = slot.GetComponentInChildren<Label>();
+                    if (labelComponent == null) continue;
+
+                    Transform anchor = labelComponent.transform;
+                    var marker = anchor.Find("ExpiryExclamation");
+
+                    bool isCritical = false;
+
+                    if (showTriangles)
                     {
-                        var comp = products[i].GetComponent<ProductExpirationComponent>();
-                        if (comp != null && comp.ExpirationDay - currentDay <= 0)
+                        var products = slot.GetComponentsInChildren<global::Product>();
+                        for (int i = 0; i < products.Count; i++)
                         {
-                            isCritical = true;
-                            break;
+                            var comp = products[i].GetComponent<ProductExpirationComponent>();
+                            if (comp != null && comp.ExpirationDay - currentDay <= 0)
+                            {
+                                isCritical = true;
+                                break;
+                            }
                         }
                     }
-                }
 
-                if (isCritical)
-                {
-                    if (marker == null) AddExclamation(anchor.gameObject, slot);
+                    if (isCritical)
+                    {
+                        if (marker == null) AddExclamation(anchor.gameObject, slot);
+                    }
+                    else if (marker != null)
+                    {
+                        ActiveMarkers.Remove(marker);
+                        _markerLineRenderers.Remove(marker);
+                        UnityEngine.Object.Destroy(marker.gameObject);
+                        if (SEProfiler.MarkerCount > 0) SEProfiler.MarkerCount--;
+                    }
                 }
-                else if (marker != null)
-                {
-                    ActiveMarkers.Remove(marker);
-                    _markerLineRenderers.Remove(marker);
-                    UnityEngine.Object.Destroy(marker.gameObject);
-                }
+                _batchCursor = idx;
             }
-            } finally { SEProfiler.End("RefreshAll", __pf); }
+            finally { SEProfiler.End("RefreshAll", __pf); }
         }
 
         public static void AnimateMarkers()
@@ -208,12 +232,11 @@ namespace SmartExpiration
 
                 marker.localScale = targetScale;
 
-                // PERF: pobierz LineRenderer raz i trzymaj w cache zamiast GetComponent co klatke.
                 LineRenderer lr;
                 if (!_markerLineRenderers.TryGetValue(marker, out lr))
                 {
                     lr = marker.GetComponent<LineRenderer>();
-                    _markerLineRenderers[marker] = lr; // cache'ujemy tez null
+                    _markerLineRenderers[marker] = lr;
                 }
 
                 if (lr != null && lr.material != null)
@@ -235,16 +258,20 @@ namespace SmartExpiration
         public static void StartBackgroundSync()
         {
             _syncQueue.Clear();
+            // A2 PERF FIX: Skan natywny indeksowany zamiast powolnego foreach
             var allSlots = UnityEngine.Object.FindObjectsOfType<DisplaySlot>();
-            foreach (var slot in allSlots)
+            if (allSlots != null)
             {
-                if (slot != null && slot.HasProduct) _syncQueue.Enqueue(slot);
+                for (int i = 0; i < allSlots.Count; i++)
+                {
+                    var slot = allSlots[i];
+                    if (slot != null && slot.HasProduct) _syncQueue.Enqueue(slot);
+                }
             }
         }
 
         private void Update()
         {
-            // ⚡ TARCZA ANTY-CRASHOWA: Zabezpieczenie pętli Update przed ubijaniem klatek przez błędy
             long __ef = SmartExpiration.SEProfiler.Begin();
             try
             {
@@ -266,7 +293,7 @@ namespace SmartExpiration
 
                 SmartExpiration.Patches.RestockerScanner.Process();
             }
-            catch { /* Cicha ignorancja błędów = stałe FPSy */ }
+            catch { }
             finally { SmartExpiration.SEProfiler.End("EngineUpdate", __ef); }
         }
     }

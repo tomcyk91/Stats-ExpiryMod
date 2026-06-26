@@ -2297,35 +2297,45 @@ namespace StatisticMod
             var cache = Plugin.ProductCache;
             if (cache == null || cache.Count == 0) return;
 
-            // --- 1. SZYBKIE SKANOWANIE STANU (POTRZEBNE DO SORTOWANIA) ---
             var shopStock = new System.Collections.Generic.Dictionary<int, int>();
             var warehouseStock = new System.Collections.Generic.Dictionary<int, int>();
 
-            foreach (var ds in UnityEngine.Object.FindObjectsOfType<DisplaySlot>())
+            // IL2CPP PERF FIX: Skan natywny po indeksie zamiast alokacji foreach
+            var allSlots = UnityEngine.Object.FindObjectsOfType<DisplaySlot>();
+            if (allSlots != null)
             {
-                if (ds != null && ds.ProductID > 0)
+                for (int i = 0; i < allSlots.Count; i++)
                 {
-                    if (!shopStock.ContainsKey(ds.ProductID)) shopStock[ds.ProductID] = 0;
-                    shopStock[ds.ProductID] += ds.ProductCount;
-                }
-            }
-
-            // POPRAWKA: Skanujemy wszystkie kartony (Box) zamiast używać błędnego RackSlot.
-            // Dzięki temu policzymy też kartony rzucone na podłogę!
-            foreach (var box in UnityEngine.Object.FindObjectsOfType<Box>())
-            {
-                if (box != null && box.Data != null)
-                {
-                    int id = box.Data.ProductID;
-                    if (id > 0)
+                    var ds = allSlots[i];
+                    if (ds != null && ds.ProductID > 0)
                     {
-                        if (!warehouseStock.ContainsKey(id)) warehouseStock[id] = 0;
-                        warehouseStock[id] += box.ProductCount;
+                        shopStock.TryGetValue(ds.ProductID, out int current);
+                        shopStock[ds.ProductID] = current + ds.ProductCount;
                     }
                 }
             }
 
-            // --- 2. LOGIKA SORTOWANIA ---
+            var allBoxes = UnityEngine.Object.FindObjectsOfType<Box>();
+            if (allBoxes != null)
+            {
+                for (int i = 0; i < allBoxes.Count; i++)
+                {
+                    var box = allBoxes[i];
+                    if (box == null) continue;
+
+                    try
+                    {
+                        var data = box.Data;
+                        if (data != null && data.ProductID > 0)
+                        {
+                            warehouseStock.TryGetValue(data.ProductID, out int current);
+                            warehouseStock[data.ProductID] = current + box.ProductCount;
+                        }
+                    }
+                    catch { }
+                }
+            }
+
             var ids = new List<int>(cache.ById.Keys);
             var polishCulture = new System.Globalization.CultureInfo("pl-PL");
 
@@ -2375,23 +2385,21 @@ namespace StatisticMod
                 return cmp * dir;
             });
 
-            // --- 3. GENEROWANIE KAFELKÓW ---
             int built = 0;
-            foreach (var pid in ids)
+            for (int idIdx = 0; idIdx < ids.Count; idIdx++)
             {
+                int pid = ids[idIdx];
                 float sellPrice = GetCurrentPrice(pid);
 
-                if (_onlyWithPrice && (sellPrice <= 0.001f || !IsProductUnlocked(pid)))
-                {
-                    continue;
-                }
+                if (_onlyWithPrice && (sellPrice <= 0.001f || !IsProductUnlocked(pid))) continue;
 
                 if (!cache.TryGet(pid, out var name, out var icon)) continue;
 
                 if (!string.IsNullOrEmpty(_searchFilter))
                 {
-                    bool matchesName = name.ToLower().Contains(_searchFilter);
-                    bool matchesId = pid.ToString().Contains(_searchFilter);
+                    // ZERO GARBAGE FIX: Szybkie przeszukiwanie bez alokowania nowych stringów (.ToLower)
+                    bool matchesName = name.IndexOf(_searchFilter, StringComparison.OrdinalIgnoreCase) >= 0;
+                    bool matchesId = pid.ToString().IndexOf(_searchFilter, StringComparison.OrdinalIgnoreCase) >= 0;
 
                     if (!matchesName && !matchesId) continue;
                 }
@@ -2404,7 +2412,7 @@ namespace StatisticMod
                 var nameTmp = GetTmpComponent(tile.transform, "Product Name");
                 if (nameTmp != null)
                 {
-                    nameTmp.text = $"{name}";
+                    nameTmp.text = name;
                     nameTmp.enableAutoSizing = true;
                     nameTmp.fontSizeMin = 8f;
                     nameTmp.fontSizeMax = 13f;
@@ -2415,7 +2423,7 @@ namespace StatisticMod
                 if (infoTmp != null)
                 {
                     int sQty = shopStock.GetValueOrDefault(pid);
-                    int wQty = warehouseStock.GetValueOrDefault(pid); // Pobiera prawidłową ilość z naszych kartonów
+                    int wQty = warehouseStock.GetValueOrDefault(pid);
                     int totalQty = sQty + wQty;
                     float buyP = GetCurrentCost(pid);
                     float sellP = GetCurrentPrice(pid);
@@ -2463,66 +2471,88 @@ namespace StatisticMod
         private Dictionary<int, SortedDictionary<int, int>> BuildGlobalExpirationMap()
         {
             var result = new Dictionary<int, SortedDictionary<int, int>>();
-            int currentDay = DayCycleManager.Instance != null ? DayCycleManager.Instance.CurrentDay : 1;
+
+            // C5 FIX: Pancerna bramka natywna przed odczytem instancji dnia
+            var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
+            int currentDay = dcm != null ? dcm.CurrentDay : 1;
 
             // --- 1. ZLICZANIE TOWARU NA PÓŁKACH SKLEPOWYCH ---
             var allSlots = UnityEngine.Object.FindObjectsOfType<DisplaySlot>();
-            foreach (var slot in allSlots)
+            if (allSlots != null)
             {
-                if (slot != null && slot.HasProduct)
+                for (int i = 0; i < allSlots.Count; i++)
                 {
-                    // Zabezpieczenie (Leniwe Ładowanie): Wymuszamy obudzenie półki
-                    ExpirationManager.SyncShelf(slot);
-
-                    var products = slot.GetComponentsInChildren<global::Product>(true);
-                    foreach (var p in products)
+                    var slot = allSlots[i];
+                    if (slot != null && slot.HasProduct)
                     {
-                        // Sięgamy bezpośrednio do komponentu z naszego nowego moda
-                        var comp = p.GetComponent<ProductExpirationComponent>();
-                        if (comp != null)
+                        ExpirationManager.SyncShelf(slot);
+
+                        var products = slot.GetComponentsInChildren<global::Product>(true);
+                        if (products != null)
                         {
-                            int pid = comp.ProductID;
-                            int daysLeft = comp.ExpirationDay - currentDay;
-
-                            if (!result.TryGetValue(pid, out var agg))
+                            for (int pIdx = 0; pIdx < products.Count; pIdx++)
                             {
-                                agg = new SortedDictionary<int, int>();
-                                result[pid] = agg;
-                            }
+                                var p = products[pIdx];
+                                if (p == null) continue;
 
-                            if (agg.ContainsKey(daysLeft)) agg[daysLeft]++;
-                            else agg[daysLeft] = 1;
+                                var comp = p.GetComponent<ProductExpirationComponent>();
+                                if (comp != null)
+                                {
+                                    int pid = comp.ProductID;
+                                    int daysLeft = comp.ExpirationDay - currentDay;
+
+                                    if (!result.TryGetValue(pid, out var agg))
+                                    {
+                                        agg = new SortedDictionary<int, int>();
+                                        result[pid] = agg;
+                                    }
+
+                                    // OPTYMALIZACJA DRZEWA BINARNEGO: Jedno przejście zamiast ContainsKey + []
+                                    agg.TryGetValue(daysLeft, out int count);
+                                    agg[daysLeft] = count + 1;
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // --- 2. ZLICZANIE TOWARU W KARTONACH (Podłoga + Regały w Magazynie) ---
+            // --- 2. ZLICZANIE TOWARU W KARTONACH ---
             var allBoxes = UnityEngine.Object.FindObjectsOfType<Box>();
-            foreach (var box in allBoxes)
+            if (allBoxes != null)
             {
-                if (box != null && box.Data != null)
+                for (int i = 0; i < allBoxes.Count; i++)
                 {
-                    int uid = box.Data.UID;
-                    int pid = box.Data.ProductID;
+                    var box = allBoxes[i];
+                    if (box == null) continue;
 
-                    // Odpytujemy wirtualny notatnik kartonów z naszego nowego moda
-                    if (ExpirationSaveManager.boxDates.TryGetValue(uid, out var datesList))
+                    try
                     {
-                        if (!result.TryGetValue(pid, out var agg))
+                        var data = box.Data;
+                        if (data != null)
                         {
-                            agg = new SortedDictionary<int, int>();
-                            result[pid] = agg;
-                        }
+                            int uid = data.UID;
+                            int pid = data.ProductID;
 
-                        // Każda data w pudełku to jedna fizyczna sztuka towaru
-                        foreach (int expDay in datesList)
-                        {
-                            int daysLeft = expDay - currentDay;
-                            if (agg.ContainsKey(daysLeft)) agg[daysLeft]++;
-                            else agg[daysLeft] = 1;
+                            if (ExpirationSaveManager.boxDates.TryGetValue(uid, out var datesList) && datesList != null)
+                            {
+                                if (!result.TryGetValue(pid, out var agg))
+                                {
+                                    agg = new SortedDictionary<int, int>();
+                                    result[pid] = agg;
+                                }
+
+                                for (int dIdx = 0; dIdx < datesList.Count; dIdx++)
+                                {
+                                    int daysLeft = datesList[dIdx] - currentDay;
+
+                                    agg.TryGetValue(daysLeft, out int count);
+                                    agg[daysLeft] = count + 1;
+                                }
+                            }
                         }
                     }
+                    catch { }
                 }
             }
 

@@ -4,12 +4,12 @@ using System.Linq;
 using System.Reflection;
 using UnityEngine;
 using System.Collections.Generic;
+using Il2CppInterop.Runtime.InteropTypes.Arrays;
 
 namespace StatisticMod
 {
     internal static class EmbeddedIconLoader
     {
-        // ⚡ BUFOR: Zatrzymuje ikonę w pamięci, zamiast czytać ją z dysku co chwilę
         private static Dictionary<string, Sprite> _cache = new Dictionary<string, Sprite>();
 
         internal static Sprite LoadPngSprite(string resourceNameContains, float pixelsPerUnit = 100f)
@@ -22,8 +22,7 @@ namespace StatisticMod
                 .FirstOrDefault(n => n.EndsWith(resourceNameContains, StringComparison.OrdinalIgnoreCase)
                                   || n.Contains(resourceNameContains, StringComparison.OrdinalIgnoreCase));
 
-            if (string.IsNullOrEmpty(resName))
-                return null;
+            if (string.IsNullOrEmpty(resName)) return null;
 
             using var stream = asm.GetManifestResourceStream(resName);
             if (stream == null) return null;
@@ -33,9 +32,13 @@ namespace StatisticMod
             byte[] data = ms.ToArray();
 
             var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            // A5 FIX: Tarcza przed spaleniem przez procedurę UnloadUnusedAssets
+            tex.hideFlags = HideFlags.DontUnloadUnusedAsset;
             tex.wrapMode = TextureWrapMode.Clamp;
             tex.filterMode = FilterMode.Bilinear;
-            tex.LoadImage(data);
+
+            // A6 FIX: Natywny most pamięci C++ dla tablicy bajtów
+            ImageConversion.LoadImage(tex, (Il2CppStructArray<byte>)data);
 
             var sprite = Sprite.Create(
                 tex,
@@ -43,6 +46,8 @@ namespace StatisticMod
                 new Vector2(0.5f, 0.5f),
                 pixelsPerUnit
             );
+            // A5 FIX: Ochrona wycinanki przed czyszczeniem pamięci
+            sprite.hideFlags = HideFlags.HideAndDontSave;
 
             _cache[resourceNameContains] = sprite;
             return sprite;

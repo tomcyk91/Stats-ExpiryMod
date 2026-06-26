@@ -11,7 +11,7 @@ using SmartExpiration.Patches;
 
 namespace StatisticMod
 {
-    [BepInPlugin("StatsandExpiryMod", "Stats & Expiration Mod", "2.3.6")]
+    [BepInPlugin("StatsandExpiryMod", "Stats & Expiration Mod", "2.4.4")]
     public class Plugin : BasePlugin
     {
         public static bool IsPolish = true;
@@ -79,7 +79,7 @@ namespace StatisticMod
         {
             Log = base.Log;
             SmartExpiration.SEProfiler.Init(); // PROFILER: log klatek+sekcji co 2s (SEprof). Wylacz: SEProfiler.Enabled=false
-            Log.LogInfo("[Supermarket Overhaul] Starting loading mod (Stats + Expiration) v2.3.6-prof...");
+            Log.LogInfo("[Supermarket Overhaul] Starting loading mod (Stats + Expiration) v2.4.4...");
 
             // 1. ENABLING ABSOLUTE SHIELD
             try
@@ -195,6 +195,9 @@ namespace StatisticMod
             TryPatch(AccessTools.Method(typeof(BoxInteraction), "TryTakeProductFromSlot"), new HarmonyMethod(AccessTools.Method(typeof(SmartExpiration.Patches.TrashBox_Take_Patch), "Prefix")), null);
 
             TryPatch(AccessTools.Method(typeof(BoxInteraction), "ThrowIntoTrashBin"), new HarmonyMethod(AccessTools.Method(typeof(SmartExpiration.Patches.TrashBox_Final_Patch), "Prefix")), null);
+
+            // --- C) PATCH NA DYNAMICZNĄ CENĘ LODÓW ---
+            TryPatch(AccessTools.Method(typeof(IceCreamManager), "CalculatePrice"), null, new HarmonyMethod(AccessTools.Method(typeof(IceCream_Sales_Patch), "Postfix")));
 
             Log.LogInfo("[Supermarket Overhaul] Successfully loaded!");
         }

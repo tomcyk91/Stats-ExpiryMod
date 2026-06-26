@@ -6,20 +6,20 @@ using HarmonyLib;
 namespace SmartExpiration.Patches
 {
     // =====================================================================
-    // ZOPTYMALIZOWANY SKANER DZIENNY (Usunięto ciężki Harmony Patch z Update!)
+    // ZOPTYMALIZOWANY SKANER DZIENNY
     // =====================================================================
     public static class RestockerScanner
     {
-
         public static bool Prepare()
         {
             return AccessTools.Method(typeof(DayCycleManager), "FinishTheDay") != null;
         }
 
         private static float _lastProcessTime = 0f;
-        private static float _lastCacheTime = 0f;
         private static DisplaySlot[] _cachedSlots = new DisplaySlot[0];
         private static Dictionary<int, int> _slotChildCounts = new Dictionary<int, int>();
+        private static int _batchCursor = 0;
+        private const int BatchSize = 8;
 
         public static void Process()
         {
@@ -29,34 +29,52 @@ namespace SmartExpiration.Patches
             long __pf = SmartExpiration.SEProfiler.Begin();
             try
             {
-                // PERF: wspoldzielony cache zamiast wlasnego skanu sceny.
                 _cachedSlots = SmartExpiration.SceneSlotCache.GetSlots();
 
-                foreach (var slot in _cachedSlots)
+                int total = _cachedSlots != null ? _cachedSlots.Length : 0;
+                if (total == 0) return;
+                if (_batchCursor >= total) _batchCursor = 0;
+
+                int examined = 0;
+                int processed = 0;
+                int idx = _batchCursor;
+
+                while (examined < total && processed < BatchSize)
                 {
+                    var slot = _cachedSlots[idx];
+                    idx++; if (idx >= total) idx = 0;
+                    examined++;
+
                     if (slot == null || !slot.HasProduct) continue;
 
                     int instanceId = slot.GetInstanceID();
                     int currentChildren = slot.transform.childCount;
 
-                    if (_slotChildCounts.ContainsKey(instanceId) && _slotChildCounts[instanceId] == currentChildren)
+                    // Optymalizacja C#: TryGetValue omija podwójne odpytywanie słownika
+                    if (_slotChildCounts.TryGetValue(instanceId, out int prevCount) && prevCount == currentChildren)
                     {
                         continue;
                     }
 
                     _slotChildCounts[instanceId] = currentChildren;
+                    processed++;
 
                     ExpirationManager.SyncShelf(slot);
 
+                    // PERF IL2CPP FIX: Skan po indeksie zamiast alokowania pętli foreach
                     var products = slot.GetComponentsInChildren<global::Product>(true);
                     bool shelfChanged = false;
 
-                    foreach (var p in products)
+                    if (products != null)
                     {
-                        if (p.GetComponent<ProductExpirationComponent>() == null)
+                        for (int i = 0; i < products.Count; i++)
                         {
-                            ExpirationManager.EnsureExpiration(p, slot);
-                            shelfChanged = true;
+                            var p = products[i];
+                            if (p != null && p.GetComponent<ProductExpirationComponent>() == null)
+                            {
+                                ExpirationManager.EnsureExpiration(p, slot);
+                                shelfChanged = true;
+                            }
                         }
                     }
 
@@ -65,10 +83,12 @@ namespace SmartExpiration.Patches
                         ExpirationManager.UpdateMemory(slot);
                     }
                 }
+                _batchCursor = idx;
             }
             catch (Exception ex)
             {
-                UnityEngine.Debug.Log("[SmartExpiration] Błąd RestockerScanner: " + ex.Message);
+                // B2 FIX: Oficjalny logger BepInEx zamiast surowego UnityEngine.Debug.Log
+                StatisticMod.Plugin.Log.LogError("[SmartExpiration] Błąd RestockerScanner: " + ex.Message);
             }
             finally { SmartExpiration.SEProfiler.End("RestockerScan", __pf); }
         }
@@ -80,15 +100,24 @@ namespace SmartExpiration.Patches
     [HarmonyPatch(typeof(DayCycleManager), "FinishTheDay")]
     public static class OvernightWorkersIntegration
     {
+        // B3 FIX: Pancerna tarcza Fail-Soft chroniąca przed aktualizacjami gry
+        public static bool Prepare()
+        {
+            return AccessTools.Method(typeof(DayCycleManager), "FinishTheDay") != null;
+        }
+
         [HarmonyPrefix]
         [HarmonyPriority(Priority.First)]
         public static void Prefix_BeforeOvernight()
         {
-            var allSlots = UnityEngine.Object.FindObjectsOfType<DisplaySlot>();
-            foreach (var slot in allSlots)
+            // PERF FIX: Korzystamy z błyskawicznego bufora SceneSlotCache
+            var allSlots = SmartExpiration.SceneSlotCache.GetSlots();
+            if (allSlots == null) return;
+
+            for (int i = 0; i < allSlots.Length; i++)
             {
-                if (slot == null || !slot.HasProduct) continue;
-                ExpirationManager.UpdateMemory(slot);
+                var slot = allSlots[i];
+                if (slot != null && slot.HasProduct) ExpirationManager.UpdateMemory(slot);
             }
         }
 
@@ -96,29 +125,35 @@ namespace SmartExpiration.Patches
         [HarmonyPriority(Priority.Last)]
         public static void Postfix_AfterOvernight()
         {
-            var allSlots = UnityEngine.Object.FindObjectsOfType<DisplaySlot>();
-            int currentDay = DayCycleManager.Instance != null ? DayCycleManager.Instance.CurrentDay : 1;
+            var allSlots = SmartExpiration.SceneSlotCache.GetSlots();
+            if (allSlots == null) return;
 
-            foreach (var slot in allSlots)
+            // C5 FIX: Bezpieczna bramka natywna przed odpytywaniem dnia
+            var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
+            int currentDay = dcm != null ? dcm.CurrentDay : 1;
+
+            for (int s = 0; s < allSlots.Length; s++)
             {
+                var slot = allSlots[s];
                 if (slot == null || !slot.HasProduct) continue;
 
                 string path = ExpirationSaveManager.GetSlotPath(slot);
                 var products = ExpirationSaveManager.GetSortedProducts(slot.transform);
 
                 List<int> oldDates = new List<int>();
-                if (ExpirationSaveManager.slotDates.ContainsKey(path))
+                if (ExpirationSaveManager.slotDates.TryGetValue(path, out var storedDates) && storedDates != null)
                 {
-                    oldDates = new List<int>(ExpirationSaveManager.slotDates[path]);
+                    oldDates = storedDates;
                 }
 
-                List<int> newDatesToSave = new List<int>();
+                List<int> newDatesToSave = new List<int>(products.Count);
 
                 for (int i = 0; i < products.Count; i++)
                 {
                     var p = products[i];
-                    var comp = p.GetComponent<ProductExpirationComponent>();
+                    if (p == null) continue;
 
+                    var comp = p.GetComponent<ProductExpirationComponent>();
                     if (comp == null) comp = p.gameObject.AddComponent<ProductExpirationComponent>();
 
                     comp.ProductID = slot.ProductID;
@@ -132,7 +167,7 @@ namespace SmartExpiration.Patches
                         int daysToSpoil = ExpirationCalculator.GetDaysForProduct(slot, slot.ProductID);
                         comp.ExpirationDay = currentDay + daysToSpoil;
                     }
-                    
+
                     newDatesToSave.Add(comp.ExpirationDay);
                 }
 

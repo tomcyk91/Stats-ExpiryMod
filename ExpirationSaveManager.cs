@@ -1,7 +1,7 @@
-﻿using System;
+﻿using StatisticMod;
+using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using UnityEngine;
 
@@ -20,7 +20,13 @@ namespace SmartExpiration
             get
             {
                 string slotName = "slot_0";
-                try { if (SaveManager.Instance != null && !string.IsNullOrEmpty(SaveManager.Instance.m_CurrentSaveFilePath)) slotName = Path.GetFileNameWithoutExtension(SaveManager.Instance.m_CurrentSaveFilePath); } catch { }
+                try
+                {
+                    var sm = SaveManager.HasInstance ? SaveManager.Instance : null;
+                    if (sm != null && !string.IsNullOrEmpty(sm.m_CurrentSaveFilePath))
+                        slotName = Path.GetFileNameWithoutExtension(sm.m_CurrentSaveFilePath);
+                }
+                catch { }
                 return slotName;
             }
         }
@@ -44,10 +50,7 @@ namespace SmartExpiration
         public static Dictionary<int, List<int>> runtimeBoxDates = new Dictionary<int, List<int>>();
         public static Dictionary<int, int> runtimeBoxDeliveryDays = new Dictionary<int, int>();
 
-        // NEW: flag to mark runtimeBoxDates that came from save file (do not auto-overwrite)
         public static Dictionary<int, bool> runtimeBoxDatesFromSave = new Dictionary<int, bool>();
-
-        // NEW: store config version under which runtimeBoxDates were generated (diagnostic / future use)
         public static Dictionary<int, int> runtimeBoxConfigVersion = new Dictionary<int, int>();
 
         public static Dictionary<int, Queue<SavedBoxData>> pendingLoadedBoxes = new Dictionary<int, Queue<SavedBoxData>>();
@@ -55,9 +58,20 @@ namespace SmartExpiration
         public static bool SaveDataInitialized = false;
         public static bool SaveLoaded = false;
 
+        // A2 FIX: Ręczna iteracja natywnej tablicy IL2CPP całkowicie omija systemowe LINQ (.ToList)
         public static List<global::Product> GetSortedProducts(Transform parent)
         {
-            var products = parent.GetComponentsInChildren<global::Product>(true).ToList();
+            var il2cppArray = parent.GetComponentsInChildren<global::Product>(true);
+            var products = new List<global::Product>(il2cppArray != null ? il2cppArray.Count : 0);
+
+            if (il2cppArray != null)
+            {
+                for (int i = 0; i < il2cppArray.Count; i++)
+                {
+                    if (il2cppArray[i] != null) products.Add(il2cppArray[i]);
+                }
+            }
+
             products.Sort((a, b) => a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex()));
             return products;
         }
@@ -76,89 +90,16 @@ namespace SmartExpiration
             return path;
         }
 
-        // Helper: bezpieczne pobranie ProductID z global::Product
+        // A1 FIX: Chirurgiczna delegacja do zweryfikowanego czystego skryptu ProductKey
         public static int GetProductIdFromProduct(global::Product p)
         {
             if (p == null) return 0;
-
             try
             {
-                Type t = p.GetType();
-
-                var prop = t.GetProperty("Data", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (prop != null)
-                {
-                    var dataObj = prop.GetValue(p);
-                    if (dataObj != null)
-                    {
-                        var idProp = dataObj.GetType().GetProperty("ProductID") ?? dataObj.GetType().GetProperty("ID") ?? dataObj.GetType().GetProperty("Uid") ?? dataObj.GetType().GetProperty("UID");
-                        if (idProp != null)
-                        {
-                            var val = idProp.GetValue(dataObj);
-                            if (val is int) return (int)val;
-                        }
-                    }
-                }
-
-                var field = t.GetField("Data", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (field != null)
-                {
-                    var dataObj = field.GetValue(p);
-                    if (dataObj != null)
-                    {
-                        var idProp = dataObj.GetType().GetProperty("ProductID") ?? dataObj.GetType().GetProperty("ID") ?? dataObj.GetType().GetProperty("Uid") ?? dataObj.GetType().GetProperty("UID");
-                        if (idProp != null)
-                        {
-                            var val = idProp.GetValue(dataObj);
-                            if (val is int) return (int)val;
-                        }
-                    }
-                }
-
-                string[] altNames = { "ProductSO", "ProductScriptable", "SO", "ProductData" };
-                foreach (var name in altNames)
-                {
-                    var pprop = t.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (pprop != null)
-                    {
-                        var so = pprop.GetValue(p);
-                        if (so != null)
-                        {
-                            var idProp = so.GetType().GetProperty("ID") ?? so.GetType().GetProperty("ProductID");
-                            if (idProp != null)
-                            {
-                                var val = idProp.GetValue(so);
-                                if (val is int) return (int)val;
-                            }
-                        }
-                    }
-
-                    var pfield = t.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (pfield != null)
-                    {
-                        var so = pfield.GetValue(p);
-                        if (so != null)
-                        {
-                            var idProp = so.GetType().GetProperty("ID") ?? so.GetType().GetProperty("ProductID");
-                            if (idProp != null)
-                            {
-                                var val = idProp.GetValue(so);
-                                if (val is int) return (int)val;
-                            }
-                        }
-                    }
-                }
-
-                var m = t.GetMethod("GetProductID", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (m != null)
-                {
-                    var r = m.Invoke(p, null);
-                    if (r is int) return (int)r;
-                }
+                int id = ProductKey.GetId(p);
+                return id > 0 ? id : 0;
             }
-            catch { }
-
-            return 0;
+            catch { return 0; }
         }
 
         public static void SaveData()
@@ -208,8 +149,8 @@ namespace SmartExpiration
             }
 
             int savedBoxesCount = 0;
-
             var allBoxes = UnityEngine.Object.FindObjectsOfType<Box>();
+
             foreach (var box in allBoxes)
             {
                 try
@@ -217,13 +158,15 @@ namespace SmartExpiration
                     if (box == null) continue;
 
                     var products = box.GetComponentsInChildren<global::Product>(true);
-                    if (products == null || products.Length == 0) continue;
+                    if (products == null || products.Count == 0) continue;
 
                     List<int> datesToSave = new List<int>();
 
-                    foreach (var p in products)
+                    for (int i = 0; i < products.Count; i++)
                     {
+                        var p = products[i];
                         if (p == null) continue;
+
                         var comp = p.GetComponent<ProductExpirationComponent>();
                         if (comp != null)
                         {
@@ -231,17 +174,18 @@ namespace SmartExpiration
                         }
                         else
                         {
-                            int boxKey = box.GetInstanceID();
-                            if (runtimeBoxDates.ContainsKey(boxKey) && runtimeBoxDates[boxKey].Count > 0)
+                            int bKey = box.GetInstanceID();
+                            if (runtimeBoxDates.ContainsKey(bKey) && runtimeBoxDates[bKey].Count > 0)
                             {
-                                var list = runtimeBoxDates[boxKey];
-                                int index = Math.Min(datesToSave.Count, list.Count - 1);
-                                if (index >= 0 && index < list.Count)
-                                    datesToSave.Add(list[index]);
+                                var list = runtimeBoxDates[bKey];
+                                int idx = Math.Min(datesToSave.Count, list.Count - 1);
+                                if (idx >= 0 && idx < list.Count)
+                                    datesToSave.Add(list[idx]);
                                 else
                                 {
                                     int prodId = GetProductIdFromProduct(p);
-                                    int day = DayCycleManager.Instance != null ? DayCycleManager.Instance.CurrentDay : 1;
+                                    var dayCycle = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
+                                    int day = dayCycle != null ? dayCycle.CurrentDay : 1;
                                     int shelfLife = ExpirationCalculator.GetDaysForProduct(null, prodId);
                                     datesToSave.Add(day + shelfLife);
                                 }
@@ -249,7 +193,8 @@ namespace SmartExpiration
                             else
                             {
                                 int prodId = GetProductIdFromProduct(p);
-                                int day = DayCycleManager.Instance != null ? DayCycleManager.Instance.CurrentDay : 1;
+                                var dayCycle = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
+                                int day = dayCycle != null ? dayCycle.CurrentDay : 1;
                                 int shelfLife = ExpirationCalculator.GetDaysForProduct(null, prodId);
                                 datesToSave.Add(day + shelfLife);
                             }
@@ -268,27 +213,9 @@ namespace SmartExpiration
                             deliveryDay = runtimeBoxDeliveryDays[boxKey];
                         else
                         {
-                            try
-                            {
-                                int oldUid = 0;
-                                var dataProp = box.GetType().GetProperty("Data", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                                if (dataProp != null)
-                                {
-                                    var dataObj = dataProp.GetValue(box);
-                                    if (dataObj != null)
-                                    {
-                                        var uidProp = dataObj.GetType().GetProperty("UID") ?? dataObj.GetType().GetProperty("Uid") ?? dataObj.GetType().GetProperty("Id");
-                                        if (uidProp != null)
-                                        {
-                                            var uidVal = uidProp.GetValue(dataObj);
-                                            if (uidVal is int) oldUid = (int)uidVal;
-                                        }
-                                    }
-                                }
-                                if (oldUid > 0 && boxDeliveryDays.ContainsKey(oldUid))
-                                    deliveryDay = boxDeliveryDays[oldUid];
-                            }
-                            catch { }
+                            int oldUid = TryGetLegacyBoxUid(box);
+                            if (oldUid > 0 && boxDeliveryDays.ContainsKey(oldUid))
+                                deliveryDay = boxDeliveryDays[oldUid];
                         }
 
                         if (productId > 0)
@@ -369,7 +296,7 @@ namespace SmartExpiration
                         {
                             if (int.TryParse(parts[1], out int productId))
                             {
-                                List<int> dates = parts[2].Split(',').Select(int.Parse).ToList();
+                                List<int> dates = ParseCsvInts(parts[2]);
                                 int deliveryDay = parts.Length >= 4 ? int.Parse(parts[3]) : 1;
 
                                 if (!pendingLoadedBoxes.ContainsKey(productId))
@@ -385,7 +312,7 @@ namespace SmartExpiration
                             {
                                 if (boxUID > 0)
                                 {
-                                    boxDates[boxUID] = parts[2].Split(',').Select(int.Parse).ToList();
+                                    boxDates[boxUID] = ParseCsvInts(parts[2]);
                                     if (parts.Length >= 4 && int.TryParse(parts[3], out int deliveryDay))
                                     {
                                         boxDeliveryDays[boxUID] = deliveryDay;
@@ -397,7 +324,7 @@ namespace SmartExpiration
                         else if (parts.Length == 2)
                         {
                             string path = parts[0];
-                            List<int> loadedList = parts[1].Split(',').Select(int.Parse).ToList();
+                            List<int> loadedList = ParseCsvInts(parts[1]);
                             slotDates[path] = loadedList;
                             StatisticMod.Plugin.DebugLog($"[LoadData] Loaded slotDates for path={path} count={loadedList.Count}");
                         }
@@ -430,6 +357,44 @@ namespace SmartExpiration
             {
                 StatisticMod.Plugin.Log.LogError($"[LoadData] BŁĄD ODCZYTU GŁÓWNEGO: {ex}");
             }
+        }
+
+        // --- MIKRO-PARSERY ARCHITEKTONICZNE ---
+
+        private static List<int> ParseCsvInts(string csv)
+        {
+            var list = new List<int>();
+            if (string.IsNullOrEmpty(csv)) return list;
+            var tokens = csv.Split(',');
+            for (int i = 0; i < tokens.Length; i++)
+            {
+                if (int.TryParse(tokens[i], out int val)) list.Add(val);
+            }
+            return list;
+        }
+
+        private static int TryGetLegacyBoxUid(Box box)
+        {
+            if (box == null) return 0;
+            try
+            {
+                var prop = box.GetType().GetProperty("Data", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (prop != null)
+                {
+                    var dataObj = prop.GetValue(box, null);
+                    if (dataObj != null)
+                    {
+                        var uidProp = dataObj.GetType().GetProperty("UID") ?? dataObj.GetType().GetProperty("Uid") ?? dataObj.GetType().GetProperty("Id");
+                        if (uidProp != null)
+                        {
+                            var val = uidProp.GetValue(dataObj, null);
+                            if (val is int i && i != 807810400) return i;
+                        }
+                    }
+                }
+            }
+            catch { }
+            return 0;
         }
     }
 }

@@ -1,6 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
+using Il2CppInterop.Runtime.InteropTypes;
 
 namespace StatisticMod
 {
@@ -23,7 +24,9 @@ namespace StatisticMod
 
         public static void RecordSale(int day, int pid, float totalUnits)
         {
-            float price = (PriceManager.Instance != null) ? PriceManager.Instance.SellingPrice(pid) : 0f;
+            // C5 FIX: Pancerna bramka przed odpytywaniem natywnego gettera cen
+            var pm = PriceManager.HasInstance ? PriceManager.Instance : null;
+            float price = (pm != null) ? pm.SellingPrice(pid) : 0f;
 
             if (WeightPerUnit.TryGetValue(pid, out float kgPerUnit))
             {
@@ -40,19 +43,20 @@ namespace StatisticMod
 
         public static void Payment_Trigger(Checkout checkoutInstance, string triggerName)
         {
+            if (checkoutInstance == null) return;
             int id = checkoutInstance.GetInstanceID();
             if (!_multiCheckoutBuffer.ContainsKey(id) || _multiCheckoutBuffer[id].Count == 0) return;
 
-            int day = (DayCycleManager.Instance != null) ? DayCycleManager.Instance.CurrentDay : 1;
-            var buffer = _multiCheckoutBuffer[id];
+            var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
+            int day = (dcm != null) ? dcm.CurrentDay : 1;
 
+            var buffer = _multiCheckoutBuffer[id];
             foreach (var item in buffer)
             {
                 RecordSale(day, item.Key, item.Value);
             }
 
             buffer.Clear();
-            // POPRAWKA: Usunięto StatsStore.SaveNow(); Dane zostają w RAM.
         }
     }
 
@@ -63,8 +67,15 @@ namespace StatisticMod
     {
         public static void Postfix(CheckoutScreen __instance, object __0, int __1)
         {
-            if (__0 == null) return;
-            var p = __0 as global::Product;
+            if (__instance == null || __0 == null) return;
+
+            // A3 FIX: Bezpieczny downcast rzutujący obrys IL2CPP w pamięci RAM
+            global::Product p = null;
+            if (__0 is Il2CppObjectBase baseObj)
+                p = baseObj.TryCast<global::Product>();
+            else
+                p = __0 as global::Product;
+
             if (p == null || p.m_ProductSO == null) return;
 
             Checkout checkout = __instance.m_Checkout;
@@ -92,6 +103,7 @@ namespace StatisticMod
     {
         public static void Postfix(Checkout __instance)
         {
+            if (__instance == null) return;
             int id = __instance.GetInstanceID();
             if (SalesUnifiedFinal._multiCheckoutBuffer.ContainsKey(id))
                 SalesUnifiedFinal._multiCheckoutBuffer[id].Clear();
@@ -102,7 +114,7 @@ namespace StatisticMod
     {
         public static void Prefix(CheckoutScreen __instance)
         {
-            if (__instance.m_Checkout != null)
+            if (__instance != null && __instance.m_Checkout != null)
             {
                 SalesUnifiedFinal.Payment_Trigger(__instance.m_Checkout, "CheckoutScreen.Clear()");
             }
@@ -113,7 +125,8 @@ namespace StatisticMod
     {
         public static void Prefix(Checkout __instance, MethodBase __originalMethod)
         {
-            SalesUnifiedFinal.Payment_Trigger(__instance, $"Radar: {__originalMethod.Name}");
+            if (__instance != null && __originalMethod != null)
+                SalesUnifiedFinal.Payment_Trigger(__instance, $"Radar: {__originalMethod.Name}");
         }
     }
 
@@ -129,10 +142,11 @@ namespace StatisticMod
     {
         public static void Prefix()
         {
-            int day = (DayCycleManager.Instance != null) ? DayCycleManager.Instance.CurrentDay : 1;
+            var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
+            int day = (dcm != null) ? dcm.CurrentDay : 1;
+
             foreach (int pid in SalesUnifiedFinal._onlineBuffer) SalesUnifiedFinal.RecordSale(day, pid, 1f);
             SalesUnifiedFinal._onlineBuffer.Clear();
-            // POPRAWKA: Usunięto StatsStore.SaveNow(); Dane zostają w RAM.
         }
     }
 
@@ -144,6 +158,26 @@ namespace StatisticMod
         public static void Postfix()
         {
             StatisticMod.GameDayOverlay.Create();
+        }
+    }
+
+    // ========================================================================
+    // 6. STOISKO Z LODAMI (Live Price Interceptor - IceCreamManager)
+    // ========================================================================
+    public static class IceCream_Sales_Patch
+    {
+        public static void Postfix(float __result)
+        {
+            try
+            {
+                if (__result <= 0f) return;
+
+                var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
+                int day = (dcm != null) ? dcm.CurrentDay : 1;
+
+                StatsStore.AddSale(day, 9999, 1, __result);
+            }
+            catch { }
         }
     }
 }

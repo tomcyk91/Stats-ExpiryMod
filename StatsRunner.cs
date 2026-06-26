@@ -32,8 +32,21 @@ namespace StatisticMod
                 {
                     Application.targetFrameRate = 120; // ⚡ Wymuszamy odblokowanie FPS
                     StatsStore.Init();
+                    Plugin.Log.LogInfo($"[StatisticMod] AKTYWNY SLOT={StatsStore.CurrentSlot} | PLIK STATYSTYK={StatsStore.AbsoluteFilePath}");
                     try { GameDayOverlay.Create(); } catch { }
                     _bootDone = true;
+                }
+
+                // F8: przeladuj statystyki z PLIKU (nadpisuje kopie w RAM).
+                // Pozwala recznie edytowac/usuwac wpisy w pliku podczas gry i wymusic odswiezenie.
+                if (Input.GetKeyDown(KeyCode.F8))
+                {
+                    try
+                    {
+                        StatsStore.Load();
+                        Plugin.Log.LogInfo($"[StatisticMod] F8: przeladowano. Plik = {StatsStore.AbsoluteFilePath}");
+                    }
+                    catch (Exception exF8) { Plugin.Log.LogWarning("[StatisticMod] F8 reload error: " + exF8.Message); }
                 }
 
                 if (StatsAppManager._instance != null)
@@ -48,7 +61,10 @@ namespace StatisticMod
                 {
                     _timer = 0f;
                     if (StatsAppManager._instance != null) StatsAppManager._instance.ManualUpdate(); // ⚡ Przeniesiono z co klatkę na 0.5s!
-                    StatsAppManager.TickRealtimeUI(); // ⚡ Usunięto TickSlotDetect (oszczędza dysk)
+                    StatsAppManager.TickRealtimeUI();
+                    // ⚡ FIX: wykrywanie slotu MUSI dzialac na zywo. Init() wola sie w menu (slot jeszcze nieznany),
+                    // wiec bez tego mod zostaje na slot_0. Throttle 1s + brak operacji dyskowych = zerowy koszt.
+                    StatsStore.TickSlotDetectFromGame();
 
                     if (DayCycleManager.Instance != null)
                     {

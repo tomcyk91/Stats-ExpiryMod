@@ -51,6 +51,12 @@ namespace StatisticMod
             TryUpdateSlotFromSaveManager(force: false);
         }
 
+        // Wymusza natychmiastowe wykrycie slotu (wolane przy zaladowaniu save'a).
+        public static void RedetectSlotForce()
+        {
+            TryUpdateSlotFromSaveManager(force: true);
+        }
+
         private static void TryUpdateSlotFromSaveManager(bool force)
         {
             if (SuspendReload) return;
@@ -59,7 +65,7 @@ namespace StatisticMod
                 var sm = SaveManager.Instance;
                 if (sm == null) return;
 
-                string savePath = sm.CurrentSaveFilePath;
+                string savePath = sm.m_CurrentSaveFilePath; // FIX: pole, ktore realnie trzyma zaladowany slot (jak ExpirationSaveManager)
                 if (string.IsNullOrEmpty(savePath)) return;
 
                 string saveName = Path.GetFileNameWithoutExtension(savePath);
@@ -233,9 +239,13 @@ namespace StatisticMod
             }
         }
 
+        // Publiczna pelna sciezka aktualnie uzywanego pliku statystyk - do diagnostyki.
+        public static string AbsoluteFilePath => FilePath;
+
         public static void Load()
         {
             var newData = new StatsData();
+            Plugin.Log.LogInfo($"[StatisticMod] Wczytuje statystyki z: {FilePath} (istnieje={File.Exists(FilePath)})");
             try
             {
                 if (!File.Exists(FilePath)) { Data = newData; return; }

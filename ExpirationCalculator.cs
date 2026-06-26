@@ -1,12 +1,11 @@
 ﻿using System.Collections.Generic;
 using UnityEngine;
-using MyBox;
 
 namespace SmartExpiration
 {
     public static class ExpirationCalculator
     {
-        // --- STARE KATEGORIE (Poprawione usunięte duplikaty) ---
+        // --- STARE KATEGORIE ---
         private static readonly HashSet<int> FruitIDs = new HashSet<int>
         {
             165, 168, 171, 173, 174, 175, 176, 177, 180, 181, 182,
@@ -52,13 +51,14 @@ namespace SmartExpiration
             if (FruitIDs.Contains(productId)) return PluginConfig.FruitDays.Value;
             if (VegetableIDs.Contains(productId)) return PluginConfig.VegetableDays.Value;
 
-            // 2. Jeśli nie ma na listach, sprawdzamy meble / atrybuty
+            // 2. B1 & C5 FIX: Natywny singleton Nokta Games z bezpieczną bramką HasInstance
             ProductSO productData = null;
             try
             {
                 if (productId > 0)
                 {
-                    productData = Singleton<IDManager>.Instance.ProductSO(productId);
+                    var idm = global::IDManager.HasInstance ? global::IDManager.Instance : null;
+                    if (idm != null) productData = idm.ProductSO(productId);
                 }
             }
             catch { }

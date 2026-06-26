@@ -1,8 +1,5 @@
 ﻿using System;
-using System.Collections;
 using System.Collections.Generic;
-using System.Reflection;
-using HarmonyLib;
 using UnityEngine;
 
 namespace StatisticMod
@@ -36,59 +33,41 @@ namespace StatisticMod
             {
                 HashSet<int> seen = new HashSet<int>();
 
-                // 1. Główna lista produktów - używamy tylko m_Products
+                // 1. Bezpośredni natywny odczyt z publicznej listy m_Products
                 var products = idManager != null ? idManager.m_Products : null;
                 if (products != null)
                 {
-                    foreach (var so in products)
+                    for (int i = 0; i < products.Count; i++)
                     {
+                        var so = products[i];
                         if (so == null) continue;
 
                         int id = 0;
                         try { id = so.ID; } catch { }
 
-                        if (id <= 0 || seen.Contains(id))
-                            continue;
+                        if (id <= 0 || seen.Contains(id)) continue;
 
                         seen.Add(id);
                         AddProductSafe(so);
                     }
                 }
 
-                // 2. BEZPIECZNY FALLBACK - Skanujemy ukryty słownik C++ zamiast pętli do 5000
-                if (idManager != null)
+                // 2. C4 FIX: Bezpośrednie odwołanie do m_ProductSODictionary bez uzywania powolnej refleksji
+                if (idManager != null && idManager.m_ProductSODictionary != null)
                 {
-                    try
+                    var dict = idManager.m_ProductSODictionary;
+                    foreach (var entry in dict)
                     {
-                        var dictField = AccessTools.Field(typeof(global::IDManager), "m_ProductDictionary");
-                        if (dictField != null)
-                        {
-                            var dictObj = dictField.GetValue(idManager);
-                            if (dictObj != null)
-                            {
-                                var il2cppObj = dictObj as Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase;
-                                var dict = il2cppObj.Cast<Il2CppSystem.Collections.Generic.Dictionary<int, ProductSO>>();
+                        ProductSO so = entry.Value;
+                        if (so == null) continue;
 
-                                foreach (var entry in dict)
-                                {
-                                    ProductSO so = entry.Value;
-                                    if (so == null) continue;
+                        int realId = 0;
+                        try { realId = so.ID; } catch { }
 
-                                    int realId = 0;
-                                    try { realId = so.ID; } catch { }
+                        if (realId <= 0 || seen.Contains(realId)) continue;
 
-                                    if (realId <= 0 || seen.Contains(realId))
-                                        continue;
-
-                                    seen.Add(realId);
-                                    AddProductSafe(so);
-                                }
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // Ciche zignorowanie, bez spamu w logach
+                        seen.Add(realId);
+                        AddProductSafe(so);
                     }
                 }
             }
@@ -112,8 +91,7 @@ namespace StatisticMod
             try { id = p.ID; }
             catch { return; }
 
-            if (id <= 0 || ById.ContainsKey(id))
-                return;
+            if (id <= 0 || ById.ContainsKey(id)) return;
 
             ById[id] = p;
 
@@ -133,57 +111,6 @@ namespace StatisticMod
             try { icon = p.ProductIcon; } catch { }
 
             IconById[id] = icon;
-        }
-
-        private IEnumerable<ProductSO> EnumerateFromReflection(global::IDManager idManager)
-        {
-            if (idManager == null)
-                yield break;
-
-            object value = null;
-            Type t = idManager.GetType();
-
-            // property: Products
-            try
-            {
-                var prop = AccessTools.Property(t, "Products");
-                if (prop != null)
-                    value = prop.GetValue(idManager, null);
-            }
-            catch { }
-
-            // field: Products
-            if (value == null)
-            {
-                try
-                {
-                    var field = AccessTools.Field(t, "Products");
-                    if (field != null)
-                        value = field.GetValue(idManager);
-                }
-                catch { }
-            }
-
-            // field: m_Products
-            if (value == null)
-            {
-                try
-                {
-                    var field = AccessTools.Field(t, "m_Products");
-                    if (field != null)
-                        value = field.GetValue(idManager);
-                }
-                catch { }
-            }
-
-            if (value is IEnumerable enumerable)
-            {
-                foreach (var item in enumerable)
-                {
-                    if (item is ProductSO so)
-                        yield return so;
-                }
-            }
         }
 
         public bool TryGetSO(int id, out ProductSO so) => ById.TryGetValue(id, out so);

@@ -8,6 +8,12 @@ namespace SmartExpiration.Patches
     [HarmonyPatch(typeof(SaveManager), nameof(SaveManager.Save), new Type[] { typeof(SaveInfo) })]
     internal static class SaveManager_Save_SaveInfo_Patch
     {
+        // B3 FIX: Tarcza ochronna przed usunięciem przeciążenia Save(SaveInfo)
+        public static bool Prepare()
+        {
+            return AccessTools.Method(typeof(SaveManager), "Save", new[] { typeof(SaveInfo) }) != null;
+        }
+
         public static void Postfix()
         {
             try
@@ -28,6 +34,12 @@ namespace SmartExpiration.Patches
     [HarmonyPatch(typeof(SaveManager), nameof(SaveManager.Save), new Type[] { typeof(string) })]
     internal static class SaveManager_Save_String_Patch
     {
+        // B3 FIX: Tarcza ochronna przed usunięciem przeciążenia Save(string)
+        public static bool Prepare()
+        {
+            return AccessTools.Method(typeof(SaveManager), "Save", new[] { typeof(string) }) != null;
+        }
+
         public static void Postfix()
         {
             try
@@ -48,6 +60,12 @@ namespace SmartExpiration.Patches
     [HarmonyPatch(typeof(SaveManager), nameof(SaveManager.Save), new Type[] { })]
     internal static class SaveManager_Save_NoArgs_Patch
     {
+        // B3 FIX: Tarcza ochronna przed usunięciem przeciążenia bezparametrowego Save()
+        public static bool Prepare()
+        {
+            return AccessTools.Method(typeof(SaveManager), "Save", Type.EmptyTypes) != null;
+        }
+
         public static void Postfix()
         {
             try
@@ -66,13 +84,11 @@ namespace SmartExpiration.Patches
     }
 
     // ========================================================================
-    // ASEKURACJA DLA KLAWISZA F5 (Jeżeli twórca dodał nową metodę)
+    // ASEKURACJA DLA KLAWISZA F5
     // ========================================================================
     [HarmonyPatch(typeof(SaveManager), "QuickSave")]
     internal static class SaveManager_QuickSave_Patch
     {
-        // Sprawdza, czy metoda QuickSave w ogóle istnieje w kodzie gry. 
-        // Zapobiega błędom w konsoli BepInEx, jeśli gra nadal używa po prostu Save() dla klawisza F5.
         public static bool Prepare()
         {
             return AccessTools.Method(typeof(SaveManager), "QuickSave") != null;
@@ -99,6 +115,12 @@ namespace SmartExpiration.Patches
     [HarmonyPatch(typeof(SaveManager), "ApplySaveData", new Type[] { })]
     internal static class SaveManager_ApplySaveData_Patch
     {
+        // B3 FIX: Tarcza ochronna przed zmianami w wewnętrznym skrypcie wczytywania gry
+        public static bool Prepare()
+        {
+            return AccessTools.Method(typeof(SaveManager), "ApplySaveData", Type.EmptyTypes) != null;
+        }
+
         public static void Postfix()
         {
             try
@@ -106,9 +128,15 @@ namespace SmartExpiration.Patches
                 StatisticMod.Plugin.DebugLog("========================================");
                 StatisticMod.Plugin.DebugLog("[GameSavePatches] ApplySaveData() zakończone. Wczytuję dane expiration...");
 
+                try
+                {
+                    StatisticMod.StatsStore.RedetectSlotForce();
+                    StatisticMod.Plugin.Log.LogInfo($"[GameSavePatches] Po ApplySaveData -> AKTYWNY SLOT={StatisticMod.StatsStore.CurrentSlot}");
+                }
+                catch (Exception exSlot) { StatisticMod.Plugin.Log.LogWarning("[GameSavePatches] Redetect slot blad: " + exSlot.Message); }
+
                 ExpirationSaveManager.LoadData();
 
-                // Uruchom DelayedSyncCoroutine na istniejącym SmartExpirationEngine
                 try
                 {
                     var engineGo = GameObject.Find("SmartExpirationEngine");
