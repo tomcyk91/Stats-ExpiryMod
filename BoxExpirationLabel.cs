@@ -23,7 +23,7 @@ namespace SmartExpiration.Patches
         private bool _isInitialized = false;
         public int BoxKey = -1;
 
-        // ⚡ Zmienna do dławienia częstotliwości skanowania kartonów
+        // Rzadki fallback. Glowna praca idzie teraz przez BoxLabelGlobalUpdater w batchach.
         private float _tickTimer = 0f;
 
         void Start()
@@ -76,28 +76,38 @@ namespace SmartExpiration.Patches
             if (_cachedFont != null) _textMesh.font = _cachedFont;
             _textMesh.gameObject.SetActive(false);
             BoxLabelPatch.AllLabels.Add(this);
+
+            // Rozbijamy fallback w czasie, zeby 1000+ kartonow nie odpalało logiki w jednej klatce.
+            _tickTimer = UnityEngine.Random.Range(0f, 2.5f);
+
+            // Proba jednorazowej inicjalizacji po starcie - tania i eliminuje potrzebe czekania na pierwszy tick.
+            ProcessRuntimeUpdate();
         }
 
         void Update()
         {
-            // ⚡ Karton odświeża logikę tylko 2 razy na sekundę.
+            // Fallback tylko kilka razy rzadziej niz poprzednio. Widoczny/trzymany karton
+            // jest aktualizowany szybciej przez BoxLabelGlobalUpdater.
             _tickTimer += Time.deltaTime;
-            if (_tickTimer < 0.5f) return;
-            // Zapobiega przeliczaniu wszystkich kartonów w tej samej klatce:
-            _tickTimer = UnityEngine.Random.Range(0f, 0.1f);
+            if (_tickTimer < 2.5f) return;
+            _tickTimer = UnityEngine.Random.Range(0f, 0.5f);
 
             if (_box == null || _box.ProductCount <= 0) return;
 
-            // PERF: CULLING PO ODLEGLOSCI - daleki karton nie wykonuje ciezkiej inicjalizacji/logiki.
-            // Eliminuje koszt indywidualnego Update() przy 2000+ kartonach w magazynie. (sqrMagnitude wg zasad)
+            // Culling po odleglosci - daleki karton nie wykonuje ciezkiej inicjalizacji/logiki.
+            var playerTf = SmartExpiration.Patches.BoxLabelGlobalUpdater.PlayerTransform;
+            if (playerTf != null)
             {
-                var __ptf = SmartExpiration.Patches.BoxLabelGlobalUpdater.PlayerTransform;
-                if (__ptf != null)
-                {
-                    Vector3 __d = transform.position - __ptf.position;
-                    if (__d.sqrMagnitude > 81f) return; // 9m * 9m
-                }
+                Vector3 d = transform.position - playerTf.position;
+                if (d.sqrMagnitude > 81f) return; // 9m * 9m
             }
+
+            ProcessRuntimeUpdate();
+        }
+
+        public void ProcessRuntimeUpdate()
+        {
+            if (_box == null || _box.ProductCount <= 0) return;
 
             int productId = GetProductId();
             if (productId <= 0) return;
@@ -112,7 +122,8 @@ namespace SmartExpiration.Patches
                 _isInitialized = true;
             }
 
-            int currentDay = DayCycleManager.Instance != null ? DayCycleManager.Instance.CurrentDay : 1;
+            var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
+            int currentDay = dcm != null ? dcm.CurrentDay : 1;
 
             if (!ExpirationSaveManager.runtimeBoxDates.ContainsKey(BoxKey))
             {
@@ -183,7 +194,7 @@ namespace SmartExpiration.Patches
                 }
             }
 
-            // ⚡ OPTYMALIZACJA PAMIĘCI: Tworzymy nową listę do zapisu TYLKO, gdy ilość towaru w kartonie lub config uległy zmianie!
+            // Tworzymy nowa liste do zapisu tylko, gdy ilosc towaru/config ulegly zmianie.
             if (countChanged || configChanged || !ExpirationSaveManager.boxDates.ContainsKey(BoxKey))
             {
                 ExpirationSaveManager.boxDates[BoxKey] = new List<int>(dates);
@@ -236,7 +247,8 @@ namespace SmartExpiration.Patches
                 }
 
                 ExpirationSaveManager.runtimeBoxDates[boxKey] = new List<int>();
-                ExpirationSaveManager.runtimeBoxDeliveryDays[boxKey] = DayCycleManager.Instance != null ? DayCycleManager.Instance.CurrentDay : 1;
+                var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
+                ExpirationSaveManager.runtimeBoxDeliveryDays[boxKey] = dcm != null ? dcm.CurrentDay : 1;
                 ExpirationSaveManager.runtimeBoxDatesFromSave[boxKey] = false;
             }
             catch { }
@@ -265,7 +277,8 @@ namespace SmartExpiration.Patches
         public void ProcessLogicUpdate()
         {
             if (!_isInitialized) return;
-            int currentDay = DayCycleManager.Instance != null ? DayCycleManager.Instance.CurrentDay : 1;
+            var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
+            int currentDay = dcm != null ? dcm.CurrentDay : 1;
 
             if (_box.ProductCount != _lastProductCount || currentDay != _lastDay)
             {
@@ -283,7 +296,8 @@ namespace SmartExpiration.Patches
                 return;
             }
 
-            int currentDay = DayCycleManager.Instance != null ? DayCycleManager.Instance.CurrentDay : 1;
+            var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
+            int currentDay = dcm != null ? dcm.CurrentDay : 1;
 
             if (ExpirationSaveManager.runtimeBoxDates.TryGetValue(BoxKey, out List<int> dates) && dates.Count > 0)
             {

@@ -30,63 +30,68 @@ namespace SmartExpiration.Patches
 
             Dictionary<int, int> spoiledProductsDaily = new Dictionary<int, int>();
 
-            var allSlots = UnityEngine.Object.FindObjectsOfType<DisplaySlot>();
+            // PERF: korzystamy ze wspolnego cache slotow zamiast kolejnego pelnego FindObjectsOfType.
+            var allSlots = SmartExpiration.SceneSlotCache.GetSlots();
 
-            foreach (var slot in allSlots)
+            if (allSlots != null)
             {
-                if (slot != null && slot.HasProduct)
+                for (int s = 0; s < allSlots.Length; s++)
                 {
-                    ExpirationManager.SyncShelf(slot);
-                    var productsOnShelf = slot.GetComponentsInChildren<global::Product>(true);
-
-                    List<int> validDates = new List<int>();
-                    int expiredCount = 0;
-
-                    foreach (var p in productsOnShelf)
+                    var slot = allSlots[s];
+                    if (slot != null && slot.HasProduct)
                     {
-                        var comp = p.GetComponent<ProductExpirationComponent>();
-                        if (comp != null)
+                        ExpirationManager.SyncShelf(slot);
+                        var productsOnShelf = slot.GetComponentsInChildren<global::Product>(true);
+
+                        List<int> validDates = new List<int>();
+                        int expiredCount = 0;
+
+                        foreach (var p in productsOnShelf)
                         {
-                            // Sprawdzamy termin względem ZAMKNIĘTEGO DNIA (closedDay)
-                            // Jeśli produkt psuł się w dniu 46, a zamykamy dzień 45 -> 46 <= 45 (Fałsz, produkt przeżywa na jutro).
-                            // Jeśli produkt psuł się w dniu 45, a zamykamy dzień 45 -> 45 <= 45 (Prawda, ląduje w koszu).
-                            if (comp.ExpirationDay <= closedDay)
-                                expiredCount++;
+                            var comp = p.GetComponent<ProductExpirationComponent>();
+                            if (comp != null)
+                            {
+                                // Sprawdzamy termin względem ZAMKNIĘTEGO DNIA (closedDay)
+                                // Jeśli produkt psuł się w dniu 46, a zamykamy dzień 45 -> 46 <= 45 (Fałsz, produkt przeżywa na jutro).
+                                // Jeśli produkt psuł się w dniu 45, a zamykamy dzień 45 -> 45 <= 45 (Prawda, ląduje w koszu).
+                                if (comp.ExpirationDay <= closedDay)
+                                    expiredCount++;
+                                else
+                                    validDates.Add(comp.ExpirationDay);
+                            }
+                        }
+
+                        if (expiredCount > 0)
+                        {
+                            int productId = slot.ProductID;
+                            if (spoiledProductsDaily.ContainsKey(productId))
+                                spoiledProductsDaily[productId] += expiredCount;
                             else
-                                validDates.Add(comp.ExpirationDay);
-                        }
-                    }
+                                spoiledProductsDaily[productId] = expiredCount;
 
-                    if (expiredCount > 0)
-                    {
-                        int productId = slot.ProductID;
-                        if (spoiledProductsDaily.ContainsKey(productId))
-                            spoiledProductsDaily[productId] += expiredCount;
-                        else
-                            spoiledProductsDaily[productId] = expiredCount;
-
-                        for (int i = 0; i < expiredCount; i++)
-                        {
-                            var poppedProduct = slot.TakeProductFromDisplay();
-                            if (poppedProduct != null)
+                            for (int i = 0; i < expiredCount; i++)
                             {
-                                poppedProduct.transform.SetParent(null);
-                                UnityEngine.Object.Destroy(poppedProduct.gameObject);
-                                totalSpoiledCount++;
+                                var poppedProduct = slot.TakeProductFromDisplay();
+                                if (poppedProduct != null)
+                                {
+                                    poppedProduct.transform.SetParent(null);
+                                    UnityEngine.Object.Destroy(poppedProduct.gameObject);
+                                    totalSpoiledCount++;
+                                }
                             }
-                        }
 
-                        var remainingProducts = ExpirationSaveManager.GetSortedProducts(slot.transform);
-                        for (int i = 0; i < remainingProducts.Count && i < validDates.Count; i++)
-                        {
-                            var rComp = ExpirationManager.EnsureExpiration(remainingProducts[i], slot);
-                            if (rComp != null)
+                            var remainingProducts = ExpirationSaveManager.GetSortedProducts(slot.transform);
+                            for (int i = 0; i < remainingProducts.Count && i < validDates.Count; i++)
                             {
-                                rComp.ExpirationDay = validDates[i];
+                                var rComp = ExpirationManager.EnsureExpiration(remainingProducts[i], slot);
+                                if (rComp != null)
+                                {
+                                    rComp.ExpirationDay = validDates[i];
+                                }
                             }
-                        }
 
-                        ExpirationManager.UpdateMemory(slot);
+                            ExpirationManager.UpdateMemory(slot);
+                        }
                     }
                 }
             }

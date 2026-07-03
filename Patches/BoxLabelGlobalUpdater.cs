@@ -1,4 +1,4 @@
-﻿﻿using System;
+﻿using System;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
@@ -10,10 +10,17 @@ namespace SmartExpiration.Patches
         public BoxLabelGlobalUpdater(IntPtr ptr) : base(ptr) { }
 
         private float _tickTimer = 0f;
+        private int _scanCursor = 0;
+
+        // PERF: zamiast petli po wszystkich kartonach co 0.2s skanujemy mala porcje.
+        // Trzymany karton jest wykrywany bezposrednio z BoxInteraction, wiec nie czeka na batch.
+        private const int LabelsPerTick = 96;
 
         // PERF: cache transformu gracza - odswiezany rzadko, bez skanu sceny co tick.
         private static Transform _playerTf;
+        private static global::BoxInteraction _playerBoxInteraction;
         private static float _playerRefreshTimer = 0f;
+
         // Poza tym promieniem etykieta kartonu jest zbedna (gracz jej nie widzi/nie trzyma).
         // Wylaczamy wtedy jej TextMeshPro -> 0 draw calls i 0 pracy CPU dla dalekich kartonow.
         private const float CullDistance = 9f;
@@ -27,12 +34,20 @@ namespace SmartExpiration.Patches
             _playerRefreshTimer -= Time.deltaTime;
             if (_playerTf != null && _playerRefreshTimer > 0f) return _playerTf;
             _playerRefreshTimer = 1.0f;
+            _playerBoxInteraction = null;
+
             try
             {
                 var lp = PlayerManager.Instance != null ? PlayerManager.Instance.LocalPlayer : null;
-                if (lp != null) { _playerTf = lp.transform; return _playerTf; }
+                if (lp != null)
+                {
+                    _playerTf = lp.transform;
+                    _playerBoxInteraction = lp.GetComponent<global::BoxInteraction>();
+                    return _playerTf;
+                }
             }
             catch { }
+
             // FALLBACK: kamera gracza zawsze istnieje - uzywamy jej jako pozycji odniesienia.
             try
             {
@@ -43,73 +58,94 @@ namespace SmartExpiration.Patches
             return _playerTf;
         }
 
+        private static BoxExpirationLabel GetHeldLabel()
+        {
+            try
+            {
+                if (_playerBoxInteraction == null && _playerTf != null)
+                    _playerBoxInteraction = _playerTf.GetComponent<global::BoxInteraction>();
+
+                var heldBox = _playerBoxInteraction != null ? _playerBoxInteraction.m_Box : null;
+                if (heldBox == null) return null;
+
+                return heldBox.GetComponent<BoxExpirationLabel>();
+            }
+            catch { return null; }
+        }
+
         void Update()
         {
-            // ⚡ Sprawdzamy etykiety 5 razy na sekunde, a nie 120.
+            // Sprawdzamy etykiety 5 razy na sekunde, ale tylko w porcjach.
             _tickTimer += Time.deltaTime;
             if (_tickTimer < 0.2f) return;
             _tickTimer = 0f;
 
             long __pf = SmartExpiration.SEProfiler.Begin();
-            try {
-            BoxLabelPatch.HeldBoxLabel = null;
-
-            int total = BoxLabelPatch.AllLabels.Count;
-            if (total == 0) return;
-
-            bool showDates = (PluginConfig.ShowDatesOnBoxes != null && PluginConfig.ShowDatesOnBoxes.Value);
-
-            Transform player = GetPlayer();
-            Vector3 playerPos = player != null ? player.position : Vector3.zero;
-            bool havePlayer = player != null;
-
-            for (int i = 0; i < total; i++)
+            try
             {
-                var label = BoxLabelPatch.AllLabels[i];
-
-                if (label == null || label.gameObject == null) continue;
-
-                // PERF: CULLING PO ODLEGLOSCI (sqrMagnitude wg zasad projektu).
-                // Daleki karton -> wylacz jego TMP i pomin caly skan. To eliminuje koszt 2000+ etykiet.
-                if (havePlayer)
+                int total = BoxLabelPatch.AllLabels.Count;
+                if (total == 0)
                 {
-                    Vector3 d = label.transform.position - playerPos;
-                    if (d.sqrMagnitude > CullDistanceSqr)
-                    {
-                        label.SetTextEnabled(false);
-                        continue;
-                    }
+                    BoxLabelPatch.HeldBoxLabel = null;
+                    return;
                 }
 
-                bool isHeld = false;
+                bool showDates = (PluginConfig.ShowDatesOnBoxes != null && PluginConfig.ShowDatesOnBoxes.Value);
 
-                try
+                Transform player = GetPlayer();
+                Vector3 playerPos = player != null ? player.position : Vector3.zero;
+                bool havePlayer = player != null;
+
+                // Najwazniejsza zmiana: trzymany karton bierzemy bezposrednio z BoxInteraction,
+                // zamiast szukac go petla po wszystkich etykietach.
+                var heldLabel = GetHeldLabel();
+                BoxLabelPatch.HeldBoxLabel = heldLabel;
+
+                if (heldLabel != null && heldLabel.gameObject != null)
                 {
-                    var parent = label.transform.parent;
-                    if (parent != null)
+                    heldLabel.SetTextEnabled(showDates);
+                    heldLabel.ProcessRuntimeUpdate();
+                    if (showDates) heldLabel.ProcessLogicUpdate();
+                }
+
+                if (_scanCursor >= total) _scanCursor = 0;
+
+                int processed = 0;
+                int examined = 0;
+                int idx = _scanCursor;
+
+                while (examined < total && processed < LabelsPerTick)
+                {
+                    if (idx >= BoxLabelPatch.AllLabels.Count) idx = 0;
+                    if (BoxLabelPatch.AllLabels.Count == 0) break;
+
+                    var label = BoxLabelPatch.AllLabels[idx];
+                    idx++;
+                    examined++;
+                    processed++;
+
+                    if (label == null || label.gameObject == null) continue;
+                    if (heldLabel != null && label == heldLabel) continue;
+
+                    if (havePlayer)
                     {
-                        string pName = parent.name;
-                        if (!pName.StartsWith("Rack", StringComparison.OrdinalIgnoreCase) &&
-                            !pName.StartsWith("Storage", StringComparison.OrdinalIgnoreCase) &&
-                            !pName.StartsWith("Slot", StringComparison.OrdinalIgnoreCase))
+                        Vector3 d = label.transform.position - playerPos;
+                        if (d.sqrMagnitude > CullDistanceSqr)
                         {
-                            isHeld = true;
-                            BoxLabelPatch.HeldBoxLabel = label;
+                            label.SetTextEnabled(false);
+                            continue;
                         }
                     }
-                }
-                catch { /* ignoruj bledy transformow */ }
 
-                try
-                {
-                    if (showDates) label.SetTextEnabled(isHeld);
-                    else label.SetTextEnabled(false);
-
-                    if (isHeld) label.ProcessLogicUpdate();
+                    // Daty pokazujemy tylko na trzymanym kartonie. Dla pobliskich kartonow
+                    // lekko podtrzymujemy runtime state w batchu, bez pelnego skanu wszystkich.
+                    label.SetTextEnabled(false);
+                    label.ProcessRuntimeUpdate();
                 }
-                catch { /* ignoruj bledy przy aktualizacji etykiety */ }
+
+                _scanCursor = idx;
             }
-            } finally { SmartExpiration.SEProfiler.End("BoxLabels", __pf); }
+            finally { SmartExpiration.SEProfiler.End("BoxLabels", __pf); }
         }
     }
 }
