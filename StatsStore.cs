@@ -16,6 +16,11 @@ namespace StatisticMod
         private static bool _dirty;
         private static float _nextAutoSaveTime;
 
+        // Chroni plik przed wyścigiem: stary zapis z wątku roboczego nie może
+        // odtworzyć danych po rozpoczęciu nowej gry.
+        private static readonly object _fileIoLock = new object();
+        private static int _writeGeneration;
+
         private static string _currentSlot = "slot_0";
         public static string CurrentSlot => _currentSlot;
 
@@ -160,12 +165,15 @@ namespace StatisticMod
         {
             try
             {
-                if (string.IsNullOrEmpty(_currentSlot)) return;
+                if (string.IsNullOrEmpty(_currentSlot) || Data == null) return;
                 Directory.CreateDirectory(SlotDir);
 
                 var daysCopy = new List<DayStats>(Data.Days.Count);
                 foreach (var d in Data.Days)
                 {
+                    if (d == null) continue;
+
+                    var products = d.Products ?? new List<ProductLine>();
                     var dCopy = new DayStats
                     {
                         Day = d.Day,
@@ -175,11 +183,12 @@ namespace StatisticMod
                         ThrownUnits = d.ThrownUnits,
                         ThrownWeightKg = d.ThrownWeightKg,
                         ThrownValue = d.ThrownValue,
-                        Products = new List<ProductLine>(d.Products.Count)
+                        Products = new List<ProductLine>(products.Count)
                     };
 
-                    foreach (var p in d.Products)
+                    foreach (var p in products)
                     {
+                        if (p == null) continue;
                         dCopy.Products.Add(new ProductLine
                         {
                             ProductId = p.ProductId,
@@ -195,15 +204,17 @@ namespace StatisticMod
                 }
 
                 string currentPath = FilePath;
-                string slotName = _currentSlot;
+                int generation = Volatile.Read(ref _writeGeneration);
+                string tempPath = currentPath + ".tmp." + generation + "." + Guid.NewGuid().ToString("N");
 
                 ThreadPool.QueueUserWorkItem(state =>
                 {
                     try
                     {
-                        var ci = CultureInfo.InvariantCulture;
+                        if (generation != Volatile.Read(ref _writeGeneration)) return;
 
-                        using (var sw = new StreamWriter(currentPath, false, Encoding.UTF8, 65536))
+                        var ci = CultureInfo.InvariantCulture;
+                        using (var sw = new StreamWriter(tempPath, false, Encoding.UTF8, 65536))
                         {
                             sw.WriteLine("# StatisticMod stats TSV");
                             sw.WriteLine("# DAY\t<day>\tSoldUnits\tSoldWeightKg\tSoldRevenue\tThrownUnits\tThrownWeightKg\tThrownValue");
@@ -217,18 +228,32 @@ namespace StatisticMod
                                 sw.Write(d.ThrownUnits); sw.Write('\t'); sw.Write(d.ThrownWeightKg.ToString(ci)); sw.Write('\t');
                                 sw.WriteLine(d.ThrownValue.ToString(ci));
 
-                                foreach (var p in d.Products)
+                                foreach (var product in d.Products)
                                 {
-                                    sw.Write("PROD\t"); sw.Write(d.Day); sw.Write('\t'); sw.Write(p.ProductId); sw.Write('\t');
-                                    sw.Write(p.SoldUnits); sw.Write('\t'); sw.Write(p.SoldWeightKg.ToString(ci)); sw.Write('\t');
-                                    sw.Write(p.SoldRevenue.ToString(ci)); sw.Write('\t');
-                                    sw.Write(p.ThrownUnits); sw.Write('\t'); sw.Write(p.ThrownWeightKg.ToString(ci)); sw.Write('\t');
-                                    sw.WriteLine(p.ThrownValue.ToString(ci));
+                                    sw.Write("PROD\t"); sw.Write(d.Day); sw.Write('\t'); sw.Write(product.ProductId); sw.Write('\t');
+                                    sw.Write(product.SoldUnits); sw.Write('\t'); sw.Write(product.SoldWeightKg.ToString(ci)); sw.Write('\t');
+                                    sw.Write(product.SoldRevenue.ToString(ci)); sw.Write('\t');
+                                    sw.Write(product.ThrownUnits); sw.Write('\t'); sw.Write(product.ThrownWeightKg.ToString(ci)); sw.Write('\t');
+                                    sw.WriteLine(product.ThrownValue.ToString(ci));
                                 }
                             }
                         }
+
+                        lock (_fileIoLock)
+                        {
+                            if (generation != Volatile.Read(ref _writeGeneration)) return;
+                            if (File.Exists(currentPath)) File.Delete(currentPath);
+                            File.Move(tempPath, currentPath);
+                        }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        Plugin.DebugWarning("[StatisticMod] Background save failed: " + ex.Message);
+                    }
+                    finally
+                    {
+                        DeleteFileSafe(tempPath);
+                    }
                 });
 
                 _dirty = false;
@@ -379,6 +404,67 @@ namespace StatisticMod
             var p = new ProductLine { ProductId = productId };
             ds.Products.Add(p);
             return p;
+        }
+
+        /// <summary>
+        /// Czyści historię sprzedaży/strat dla nowej gry w podanym slocie.
+        /// Nie wywołuje SaveNow(), więc stary stan nie zostanie ponownie zapisany.
+        /// </summary>
+        public static void ResetForNewGame(string slotName)
+        {
+            slotName = NormalizeSlotName(slotName);
+
+            // Unieważnij wszystkie wcześniej zakolejkowane zapisy.
+            Interlocked.Increment(ref _writeGeneration);
+
+            _currentSlot = slotName;
+            CurrentDay = 1;
+            SuspendReload = false;
+            _nextSlotPoll = 0f;
+            _nextAutoSaveTime = Time.realtimeSinceStartup + 20f;
+
+            Data = new StatsData();
+            Data.Days.Add(new DayStats { Day = 1 });
+            _dirty = false;
+
+            lock (_fileIoLock)
+            {
+                DeleteFileSafe(FilePath);
+                DeleteFileSafe(FilePath + ".tmp");
+                DeleteTempFilesSafe(FilePath);
+            }
+        }
+
+        private static string NormalizeSlotName(string slotName)
+        {
+            if (string.IsNullOrWhiteSpace(slotName)) return "slot_0";
+            string normalized = Path.GetFileNameWithoutExtension(slotName.Trim()).ToLowerInvariant();
+            return normalized.StartsWith("slot_", StringComparison.OrdinalIgnoreCase)
+                ? normalized
+                : "slot_0";
+        }
+
+        private static void DeleteTempFilesSafe(string basePath)
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(basePath);
+                string fileName = Path.GetFileName(basePath);
+                if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory)) return;
+
+                string[] files = Directory.GetFiles(directory, fileName + ".tmp*");
+                for (int i = 0; i < files.Length; i++) DeleteFileSafe(files[i]);
+            }
+            catch { }
+        }
+
+        private static void DeleteFileSafe(string path)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(path) && File.Exists(path)) File.Delete(path);
+            }
+            catch { }
         }
 
         public static void SetSlotIndex(int index) { SetSlot($"slot_{index}"); }

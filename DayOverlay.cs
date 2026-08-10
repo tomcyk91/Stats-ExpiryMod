@@ -33,7 +33,7 @@ namespace StatisticMod
                 textGO.transform.SetParent(_overlayGO.transform, false);
 
                 _dayText = textGO.AddComponent<TextMeshProUGUI>();
-                _dayText.text = "DZIEŃ --";
+                _dayText.text = Plugin.DayLabel(-1);
                 _dayText.fontSize = 35;
 
                 var rt = _dayText.GetComponent<RectTransform>();
@@ -45,7 +45,6 @@ namespace StatisticMod
 
                 _dayText.alignment = TextAlignmentOptions.TopRight;
                 _dayText.color = new Color(1, 1, 1, 0.8f);
-
                 _overlayGO.AddComponent<GameDayOverlay>();
             }
             catch { }
@@ -54,7 +53,7 @@ namespace StatisticMod
         private float _timer = 0;
         private float _fontTimer = 0;
         private bool _fontLoaded = false;
-        private int _fontRetries = 0; // ⚡ Limit prób obciążających procesor
+        private int _fontRetries = 0;
 
         void Start()
         {
@@ -66,7 +65,7 @@ namespace StatisticMod
             if (!_fontLoaded && _text != null && _fontRetries < 3)
             {
                 _fontTimer += Time.deltaTime;
-                if (_fontTimer >= 3.0f) // ⚡ Szukamy czcionki tylko raz na 3 sekundy
+                if (_fontTimer >= 3.0f)
                 {
                     _fontTimer = 0f;
                     _fontRetries++;
@@ -89,13 +88,11 @@ namespace StatisticMod
             }
 
             _timer += Time.deltaTime;
-            if (_timer >= 2.0f) // ⚡ Odświeżamy numer dnia tylko raz na 2 sekundy!
+            if (_timer >= 2.0f)
             {
                 _timer = 0;
                 if (DayCycleManager.Instance != null && _text != null)
-                {
-                    _text.text = $"DZIEŃ {DayCycleManager.Instance.CurrentDay}";
-                }
+                    _text.text = Plugin.DayLabel(DayCycleManager.Instance.CurrentDay);
             }
         }
     }

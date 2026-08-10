@@ -1,0 +1,31 @@
+Stats & Expiry Mod - cumulative changelog
+==========================================
+
+v2.5.5
+- Card text fitting and clipping in all Business Analysis views.
+- Compact labels for Demand, Missed Sales, Restock and Pricing cards.
+- Ellipsis and auto-sizing for long product names.
+- Dropdown panels clamped to the application rectangle.
+- Dropdowns shift left/up when they would leave the visible area.
+- Plugin version updated to 2.5.5.
+
+v2.5.4
+- Dropdown layout and separate Analysis range button.
+- Automatic fitting of header and sort labels.
+
+v2.5.3
+- Dropdown navigation for windows, filters and sorting.
+
+v2.5.2
+- Requested/Picked/Sold separation.
+- Completed-day history and OpenDay buffer.
+- TSV/JSON sales reconciliation and product 9999 support.
+
+v2.5.1
+- Completed-day analysis ranges.
+- Safer delayed saving during day transition.
+- Demand snapshot optimizations.
+
+v2.5.0
+- Business Analysis: demand, missed sales, restock and pricing.
+- Expiration load performance improvements.

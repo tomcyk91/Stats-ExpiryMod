@@ -1,0 +1,24 @@
+AKTUALIZACJA: KOSZYK NA PRZETERMINOWANE PRODUKTY
+
+Pliki do projektu:
+- PluginConfig.cs (podmień)
+- TrashBoxManager.cs (podmień)
+- TrashBasketObjLoader.cs (dodaj jako nowy plik C#)
+- Plugin.cs (podmień; wersja 2.4.5)
+- basket.obj (dodaj do projektu)
+
+Model basket.obj:
+1. Zalecane: zaznacz basket.obj w Visual Studio i ustaw Build Action = Embedded Resource.
+2. Fallback: bez osadzania możesz skopiować basket.obj obok DLL moda albo do podfolderu assets.
+
+Nowy config po uruchomieniu:
+[Koszyk na przeterminowane produkty (Expired Products Basket)]
+SpawnKey = U
+
+Możesz wpisać inny Unity KeyCode, np. B, K, F6. Wartość None wyłącza skrót.
+
+Działanie:
+- natywny Box i jego collider nadal obsługują podnoszenie/odkładanie/wyrzucanie;
+- renderer kartonu jest ukryty;
+- widoczny jest czerwony, matowy koszyk z czarną rączką jak w PlayerShoppingMod;
+- gdy OBJ nie zostanie znaleziony, mod awaryjnie pokazuje poprzedni czarny karton.

@@ -5,9 +5,6 @@ using Il2CppInterop.Runtime.InteropTypes;
 
 namespace StatisticMod
 {
-    // ========================================================================
-    // 1. GŁÓWNA KLASA STATYSTYK I BUFORY
-    // ========================================================================
     public static class SalesUnifiedFinal
     {
         public static readonly Dictionary<int, Dictionary<int, float>> _multiCheckoutBuffer = new Dictionary<int, Dictionary<int, float>>();
@@ -22,22 +19,44 @@ namespace StatisticMod
             {186, 0.119f}, {187, 0.119f}, {188, 10.000f}
         };
 
+        public static void ClearRuntimeBuffers()
+        {
+            foreach (var entry in _multiCheckoutBuffer)
+                entry.Value?.Clear();
+
+            _multiCheckoutBuffer.Clear();
+            _onlineBuffer.Clear();
+        }
+
         public static void RecordSale(int day, int pid, float totalUnits)
         {
-            // C5 FIX: Pancerna bramka przed odpytywaniem natywnego gettera cen
             var pm = PriceManager.HasInstance ? PriceManager.Instance : null;
-            float price = (pm != null) ? pm.SellingPrice(pid) : 0f;
+            float price = pm != null ? pm.SellingPrice(pid) : 0f;
 
             if (WeightPerUnit.TryGetValue(pid, out float kgPerUnit))
             {
                 float kg = totalUnits * kgPerUnit;
                 float revenue = price * kg;
                 StatsStore.AddSaleF(day, pid, kg, revenue, true);
+
+                try
+                {
+                    BusinessAnalysisStore.RecordConfirmedSale(
+                        day, pid, totalUnits, kg, revenue, true);
+                }
+                catch { }
             }
             else
             {
                 float revenue = price * totalUnits;
                 StatsStore.AddSaleF(day, pid, totalUnits, revenue, false);
+
+                try
+                {
+                    BusinessAnalysisStore.RecordConfirmedSale(
+                        day, pid, totalUnits, 0f, revenue, false);
+                }
+                catch { }
             }
         }
 
@@ -48,28 +67,22 @@ namespace StatisticMod
             if (!_multiCheckoutBuffer.ContainsKey(id) || _multiCheckoutBuffer[id].Count == 0) return;
 
             var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
-            int day = (dcm != null) ? dcm.CurrentDay : 1;
+            int day = dcm != null ? dcm.CurrentDay : 1;
 
             var buffer = _multiCheckoutBuffer[id];
             foreach (var item in buffer)
-            {
                 RecordSale(day, item.Key, item.Value);
-            }
 
             buffer.Clear();
         }
     }
 
-    // ========================================================================
-    // 2. SKANOWANIE KASY
-    // ========================================================================
     public static class CheckoutScreen_AddProduct_Patch
     {
         public static void Postfix(CheckoutScreen __instance, object __0, int __1)
         {
             if (__instance == null || __0 == null) return;
 
-            // A3 FIX: Bezpieczny downcast rzutujący obrys IL2CPP w pamięci RAM
             global::Product p = null;
             if (__0 is Il2CppObjectBase baseObj)
                 p = baseObj.TryCast<global::Product>();
@@ -87,7 +100,7 @@ namespace StatisticMod
             if (!SalesUnifiedFinal._multiCheckoutBuffer.ContainsKey(cid))
                 SalesUnifiedFinal._multiCheckoutBuffer[cid] = new Dictionary<int, float>();
 
-            float amount = __1 > 0 ? (float)__1 : 1f;
+            float amount = __1 > 0 ? __1 : 1f;
 
             if (SalesUnifiedFinal._multiCheckoutBuffer[cid].ContainsKey(pid))
                 SalesUnifiedFinal._multiCheckoutBuffer[cid][pid] += amount;
@@ -96,9 +109,6 @@ namespace StatisticMod
         }
     }
 
-    // ========================================================================
-    // 3. TRIGGERY PŁATNOŚCI
-    // ========================================================================
     public static class Checkout_StartCheckout_Patch
     {
         public static void Postfix(Checkout __instance)
@@ -115,9 +125,7 @@ namespace StatisticMod
         public static void Prefix(CheckoutScreen __instance)
         {
             if (__instance != null && __instance.m_Checkout != null)
-            {
                 SalesUnifiedFinal.Payment_Trigger(__instance.m_Checkout, "CheckoutScreen.Clear()");
-            }
         }
     }
 
@@ -130,9 +138,6 @@ namespace StatisticMod
         }
     }
 
-    // ========================================================================
-    // 4. ONLINE ORDERS (Paczki)
-    // ========================================================================
     public static class OnlineOrder_AddProduct_Patch
     {
         public static void Postfix(int productId) => SalesUnifiedFinal._onlineBuffer.Add(productId);
@@ -143,16 +148,15 @@ namespace StatisticMod
         public static void Prefix()
         {
             var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
-            int day = (dcm != null) ? dcm.CurrentDay : 1;
+            int day = dcm != null ? dcm.CurrentDay : 1;
 
-            foreach (int pid in SalesUnifiedFinal._onlineBuffer) SalesUnifiedFinal.RecordSale(day, pid, 1f);
+            foreach (int pid in SalesUnifiedFinal._onlineBuffer)
+                SalesUnifiedFinal.RecordSale(day, pid, 1f);
+
             SalesUnifiedFinal._onlineBuffer.Clear();
         }
     }
 
-    // ========================================================================
-    // 5. INNE PATCHE (Nakładka UI)
-    // ========================================================================
     public static class DayCycleOverlayPatch
     {
         public static void Postfix()
@@ -161,9 +165,6 @@ namespace StatisticMod
         }
     }
 
-    // ========================================================================
-    // 6. STOISKO Z LODAMI (Live Price Interceptor - IceCreamManager)
-    // ========================================================================
     public static class IceCream_Sales_Patch
     {
         public static void Postfix(float __result)
@@ -173,9 +174,11 @@ namespace StatisticMod
                 if (__result <= 0f) return;
 
                 var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
-                int day = (dcm != null) ? dcm.CurrentDay : 1;
+                int day = dcm != null ? dcm.CurrentDay : 1;
 
                 StatsStore.AddSale(day, 9999, 1, __result);
+                BusinessAnalysisStore.RecordConfirmedSale(
+                    day, 9999, 1f, 0f, __result, false);
             }
             catch { }
         }

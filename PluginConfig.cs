@@ -31,6 +31,13 @@ namespace SmartExpiration
 
         public static ConfigEntry<bool> ShowWarningTriangles;
 
+        // Koszyk na przeterminowane produkty
+        public static ConfigEntry<UnityEngine.KeyCode> TrashBasketSpawnKey;
+
+        // Ustawienia wydajności ładowania terminów
+        public static ConfigEntry<int> LoadSyncSlotsPerFrame;
+        public static ConfigEntry<bool> DetailedLoadLogs;
+
         public static void BindConfig(ConfigFile config)
         {
             DefaultShelfDays = config.Bind("Categories", "RegularShelf", 14, "Ile dni ważności mają produkty na zwykłych półkach? / How many days of shelf life do products on regular shelves have?");
@@ -66,6 +73,27 @@ namespace SmartExpiration
                 "ShowWarningTriangles",
                 true,
                 "Pokazuj trójkąty ostrzegawcze na półkach przy kończącym się terminie. / Show warning triangles on shelves for expiring products."
+            );
+
+            TrashBasketSpawnKey = config.Bind(
+                "Koszyk na przeterminowane produkty (Expired Products Basket)",
+                "SpawnKey",
+                UnityEngine.KeyCode.U,
+                "Klawisz tworzący koszyk na przeterminowane produkty. Ustaw None, aby wyłączyć skrót. / Key used to spawn the expired-products basket. Set None to disable the shortcut."
+            );
+
+            LoadSyncSlotsPerFrame = config.Bind(
+                "Performance",
+                "LoadSyncSlotsPerFrame",
+                4,
+                "Liczba slotów półek synchronizowanych w jednej klatce po wczytaniu zapisu (1-32). Mniejsza wartość = mniej przycięć, ale dłuższe kończenie synchronizacji. / Number of shelf slots synchronized per frame after loading (1-32)."
+            );
+
+            DetailedLoadLogs = config.Bind(
+                "Performance",
+                "DetailedLoadLogs",
+                false,
+                "Loguj każdy wczytany slot i karton. Włączać tylko do diagnostyki, ponieważ duży sklep może wygenerować setki wpisów. / Log every loaded slot and box. Enable for diagnostics only."
             );
         }
     }

@@ -1,4 +1,4 @@
-﻿using Il2CppInterop.Runtime.Attributes;
+using Il2CppInterop.Runtime.Attributes;
 using Il2CppInterop.Runtime.Injection;
 using PG;
 using System;
@@ -90,7 +90,7 @@ namespace StatisticMod
         private bool _onlyWithPrice = true; // Domyślnie pokazujemy tylko produkty z ceną
         private Button _filterAvailableBtn;
         private TextMeshProUGUI _filterAvailableLabel;        
-        private enum HubMode { Stats, Expiration, Products, Charts }
+        private enum HubMode { Stats, Expiration, Products, DailySummary, Analysis, Charts }
         private HubMode _hubMode = HubMode.Stats;
 
         private GameObject _daySelectorGO;
@@ -470,9 +470,12 @@ namespace StatisticMod
             if (_gameFont != null) _titleTmp.font = _gameFont;
             _titleTmp.color = new Color32(255, 245, 220, 255);
             _titleTmp.enableAutoSizing = true;
-            _titleTmp.fontSizeMin = 9;
-            _titleTmp.fontSizeMax = 13;
+            _titleTmp.fontSizeMin = 8f;
+            _titleTmp.fontSizeMax = 13f;
+            _titleTmp.enableWordWrapping = false;
+            _titleTmp.overflowMode = TextOverflowModes.Ellipsis;
             _titleTmp.raycastTarget = false;
+            AttachHeaderDropdownArrow(_titleModeBtn, "TitleDropdownArrow");
 
             // =========================
             // NEW: FILTER BUTTON (Between Title and Day Selector)
@@ -500,6 +503,8 @@ namespace StatisticMod
             var ftrt = filterTextGO.AddComponent<RectTransform>();
             ftrt.anchorMin = Vector2.zero;
             ftrt.anchorMax = Vector2.one;
+            ftrt.offsetMin = new Vector2(4f, 0f);
+            ftrt.offsetMax = new Vector2(-20f, 0f);
 
             _filterAvailableLabel = filterTextGO.AddComponent<TextMeshProUGUI>();
             _filterAvailableLabel.text = "DOSTĘPNE"; // Początkowy tekst
@@ -510,9 +515,12 @@ namespace StatisticMod
             _filterAvailableLabel.color = new Color32(255, 245, 220, 255);
             SafeSetOutline(_filterAvailableLabel, 0.15f);
             _filterAvailableLabel.enableAutoSizing = true;
-            _filterAvailableLabel.fontSizeMin = 8;
-            _filterAvailableLabel.fontSizeMax = 10;
+            _filterAvailableLabel.fontSizeMin = 7f;
+            _filterAvailableLabel.fontSizeMax = 11f;
+            _filterAvailableLabel.enableWordWrapping = false;
+            _filterAvailableLabel.overflowMode = TextOverflowModes.Ellipsis;
             _filterAvailableLabel.raycastTarget = false;
+            AttachHeaderDropdownArrow(_filterAvailableBtn, "FilterDropdownArrow");
 
             // =========================
             // SORT MODE BUTTON (like before)
@@ -541,19 +549,26 @@ namespace StatisticMod
             var smTextRT = smTextGO.AddComponent<RectTransform>();
             smTextRT.anchorMin = Vector2.zero;
             smTextRT.anchorMax = Vector2.one;
-            smTextRT.offsetMin = Vector2.zero;
-            smTextRT.offsetMax = Vector2.zero;
+            smTextRT.offsetMin = new Vector2(4f, 0f);
+            smTextRT.offsetMax = new Vector2(-20f, 0f);
 
             _sortLabelTmp = smTextGO.AddComponent<TextMeshProUGUI>();
             _sortLabelTmp.text = "SORT";
             _sortLabelTmp.raycastTarget = false;
             _sortLabelTmp.alignment = TextAlignmentOptions.Center;
-            _sortLabelTmp.fontSize = 13;
+            _sortLabelTmp.fontSize = 13f;
             _sortLabelTmp.fontStyle = FontStyles.Bold;
             if (_gameFont != null) _sortLabelTmp.font = _gameFont;
             _sortLabelTmp.color = new Color32(255, 245, 220, 255);
+            _sortLabelTmp.enableAutoSizing = true;
+            _sortLabelTmp.fontSizeMin = 6f;
+            _sortLabelTmp.fontSizeMax = 13f;
+            _sortLabelTmp.enableWordWrapping = false;
+            _sortLabelTmp.overflowMode = TextOverflowModes.Ellipsis;
+            _sortLabelTmp.characterSpacing = -0.5f;
             SafeSetOutline(_sortLabelTmp, 0.15f);
             _sortLabelTmp.outlineColor = new Color32(0, 0, 0, 180);
+            AttachHeaderDropdownArrow(_sortModeBtn, "SortDropdownArrow");
 
             // =========================
             // SORT DIR BUTTON (arrow)
@@ -1069,7 +1084,10 @@ namespace StatisticMod
 
         private void HideStats()
         {
+            HideHeaderDropdown();
+            HideChartDropdown();
             _statsApp?.SetActive(false);
+            _isOpen = false;
 
             // 🔥 Reset dnia – przy kolejnym otwarciu będzie "dziś"
             _selectedDay = -1;
@@ -1681,7 +1699,13 @@ namespace StatisticMod
 
         private void OnPrevDayClicked()
         {
-            if (_hubMode != HubMode.Stats) return; // ✅
+            if (_hubMode == HubMode.DailySummary)
+            {
+                MoveDailySummaryDay(-1);
+                return;
+            }
+
+            if (_hubMode != HubMode.Stats) return;
             _selectedDay = Mathf.Max(1, _selectedDay - 1);
             RebuildDaysUI();
             UpdateDayLabel();
@@ -1690,7 +1714,13 @@ namespace StatisticMod
 
         private void OnNextDayClicked()
         {
-            if (_hubMode != HubMode.Stats) return; // ✅
+            if (_hubMode == HubMode.DailySummary)
+            {
+                MoveDailySummaryDay(1);
+                return;
+            }
+
+            if (_hubMode != HubMode.Stats) return;
             _selectedDay = _selectedDay + 1;
             RebuildDaysUI();
             UpdateDayLabel();
@@ -1699,43 +1729,7 @@ namespace StatisticMod
 
         private void OnSortModeClicked()
         {
-            if (_hubMode == HubMode.Stats)
-            {
-                var values = (StatsSortMode[])Enum.GetValues(typeof(StatsSortMode));
-                int index = Array.IndexOf(values, _statsSortMode);
-                _statsSortMode = values[(index + 1) % values.Length];
-
-                Plugin.DebugLog($"[Stats] Mode changed to: {_statsSortMode}");
-            }
-            else if (_hubMode == HubMode.Expiration)
-            {
-                // Tutaj zostawiamy Twoją logikę dla Expiration (Name -> ID -> Expiry)
-                if (_simpleSort == SimpleSortMode.Name) _simpleSort = SimpleSortMode.ProductId;
-                else if (_simpleSort == SimpleSortMode.ProductId) _simpleSort = SimpleSortMode.NearestExpiry;
-                else _simpleSort = SimpleSortMode.Name;
-            }
-            else // HubMode.Products (TUTAJ ZMIENIAMY)
-            {
-                // Pobieramy wszystkie wartości SimpleSortMode
-                var values = (SimpleSortMode[])Enum.GetValues(typeof(SimpleSortMode));
-                int index = Array.IndexOf(values, _simpleSort);
-
-                // Przełączamy na następny indeks
-                index = (index + 1) % values.Length;
-
-                // SKIP: Jeśli trafimy na NearestExpiry, przeskakujemy o jeszcze jeden
-                if (values[index] == SimpleSortMode.NearestExpiry)
-                {
-                    index = (index + 1) % values.Length;
-                }
-
-                _simpleSort = values[index];
-
-                Plugin.DebugLog($"[Stats] Product Sort changed to: {_simpleSort}");
-            }
-
-            UpdateSortHeaderUI();
-            BuildForHubMode();
+            ToggleSortDropdown();
         }
 
         private void OnSortDirClicked()
@@ -1791,10 +1785,10 @@ namespace StatisticMod
         {
             if (_sortLabelTmp == null) return;
 
-            bool isChart = (_hubMode == HubMode.Charts);
-            _sortModeBtn?.gameObject.SetActive(!isChart);
-            _sortDirBtn?.gameObject.SetActive(!isChart);
-            if (isChart) return;
+            bool hideSort = (_hubMode == HubMode.Charts || _hubMode == HubMode.DailySummary);
+            _sortModeBtn?.gameObject.SetActive(!hideSort);
+            _sortDirBtn?.gameObject.SetActive(!hideSort);
+            if (hideSort) return;
 
             string label = "";
 
@@ -1814,7 +1808,7 @@ namespace StatisticMod
                     _ => Plugin.T("NAZWA", "NAME")
                 };
             }
-            else // HubMode.Products
+            else if (_hubMode == HubMode.Products)
             {
                 label = _simpleSort switch
                 {
@@ -1826,6 +1820,10 @@ namespace StatisticMod
                     SimpleSortMode.TotalValue => Plugin.T("WARTOŚĆ", "TOTAL VALUE"),
                     _ => Plugin.T("NAZWA", "NAME")
                 };
+            }
+            else if (_hubMode == HubMode.Analysis)
+            {
+                label = GetAnalysisSortLabel();
             }
 
             // Tłumaczymy również prefiks "SORT: "
@@ -2107,35 +2105,9 @@ namespace StatisticMod
         }
         private void OnTitleModeClicked()
         {
-            HideChartDropdown(); 
-
-            // Przełączamy tryb na następny
-            _hubMode = (HubMode)(((int)_hubMode + 1) % 4);
-
-            // 🔥 NOWA LOGIKA: Resetowanie ustawień przy wejściu w konkretne tryby
-            if (_hubMode == HubMode.Stats)
-            {
-                _selectedDay = GetCurrentDaySafe();
-                RebuildDaysUI();
-                UpdateDayLabel();
-            }
-            // ✅ DODAJEMY TO: Wymuszamy sortowanie po terminie przy wejściu w zakładkę TERMINY
-            else if (_hubMode == HubMode.Expiration)
-            {
-                _simpleSort = SimpleSortMode.NearestExpiry;
-                _sortAsc = true; // true = Rosnąco (dni: 0, 1, 2...), czyli najkrótsze na górze
-            }
-            // Opcjonalnie: Resetuj sortowanie na Nazwę przy wejściu w Produkty
-            else if (_hubMode == HubMode.Products)
-            {
-                _simpleSort = SimpleSortMode.Name;
-                _sortAsc = true;
-            }
-
-            RefreshTitleModeText();
-            BuildForHubMode();
-            RefreshHeaderForMode();
+            ToggleHubModeDropdown();
         }
+
         public void HideChartDropdown()
         {
             if (_productDropPanel != null && _productDropPanel.activeSelf)
@@ -2143,6 +2115,9 @@ namespace StatisticMod
                 Plugin.DebugLog("[Charts] Wymuszono zamknięcie panelu wyszukiwania produktu.");
                 _productDropPanel.SetActive(false);
             }
+
+            if (_dropdownBlocker != null)
+                _dropdownBlocker.SetActive(false);
         }
 
         private void RefreshTitleModeText()
@@ -2154,6 +2129,8 @@ namespace StatisticMod
                 HubMode.Stats => Plugin.T("STATYSTYKI", "STATISTICS"),
                 HubMode.Expiration => Plugin.T("TERMINY", "EXPIRATION"),
                 HubMode.Products => Plugin.T("PRODUKTY", "PRODUCTS"),
+                HubMode.DailySummary => Plugin.T("PODSUMOWANIE", "SUMMARY"),
+                HubMode.Analysis => Plugin.T("ANALIZA", "ANALYSIS"),
                 HubMode.Charts => Plugin.T("WYKRESY", "CHARTS"),
                 _ => "STATS"
             };
@@ -2163,21 +2140,21 @@ namespace StatisticMod
         {
             UpdateSortHeaderUI();
 
-            // 1. Zarządzanie przyciskiem filtra (Tylko w Produktach)
+            // 1. Filtr dostępności w Produktach oraz zakres dni w Analizie
             if (_filterAvailableBtn != null)
             {
-                bool isProductMode = (_hubMode == HubMode.Products);
-                _filterAvailableBtn.gameObject.SetActive(isProductMode);
-                if (isProductMode) UpdateFilterButtonUI();
+                bool showFilter = (_hubMode == HubMode.Products || _hubMode == HubMode.Analysis);
+                _filterAvailableBtn.gameObject.SetActive(showFilter);
+                if (showFilter) UpdateFilterButtonUI();
             }
 
             // 2. POPRAWKA SELEKTORA DNI:
             // Zmieniamy z != Products na == Stats
             // Teraz selektor dni pokaże się TYLKO w zakładce STATYSTYKI
-            _daySelectorGO?.SetActive(_hubMode == HubMode.Stats);
+            _daySelectorGO?.SetActive(_hubMode == HubMode.Stats || _hubMode == HubMode.DailySummary);
 
             // 3. Zarządzanie wyszukiwarką (Tylko w Produktach)
-            _searchBarGO?.SetActive(_hubMode == HubMode.Products);
+            _searchBarGO?.SetActive(_hubMode == HubMode.Products || _hubMode == HubMode.Analysis);
 
             // 4. Budowanie zawartości
             switch (_hubMode)
@@ -2201,6 +2178,21 @@ namespace StatisticMod
                         _titleTmp.text = Plugin.T("PRODUKTY", "PRODUCTS");
                     ExitChartsLayout();
                     BuildAllProductsTilesNow();
+                    break;
+
+                case HubMode.DailySummary:
+                    if (_titleTmp != null)
+                        _titleTmp.text = Plugin.T("PODSUMOWANIE", "SUMMARY");
+                    ExitChartsLayout();
+                    BuildDailySummaryTiles();
+                    break;
+
+                case HubMode.Analysis:
+                    // Zakres jest pokazywany wyłącznie w osobnym przycisku filtra.
+                    // Nie dopisujemy go do tytułu, bo powodowało to nachodzenie tekstu.
+                    if (_titleTmp != null)
+                        _titleTmp.text = Plugin.T("ANALIZA", "ANALYSIS");
+                    BuildAnalysisTilesNow();
                     break;
 
                 case HubMode.Charts:
@@ -2710,7 +2702,7 @@ namespace StatisticMod
         }
         private void RefreshHeaderForMode()
         {
-            bool showDay = (_hubMode == HubMode.Stats);
+            bool showDay = (_hubMode == HubMode.Stats || _hubMode == HubMode.DailySummary);
             _daySelectorGO?.SetActive(showDay);
 
             // Wywołujemy zunifikowaną metodę, która wie, co wypisać w każdym trybie
@@ -2808,9 +2800,12 @@ namespace StatisticMod
                     _ => _statsSortMode.ToString()
                 };
             }
+            else if (_hubMode == HubMode.Analysis)
+            {
+                modeText = GetAnalysisSortLabel();
+            }
             else
             {
-                // Tryb Terminy lub Produkty - używamy _simpleSort
                 modeText = _simpleSort switch
                 {
                     SimpleSortMode.Name => Plugin.T("NAZWA", "NAME"),
@@ -2852,11 +2847,14 @@ namespace StatisticMod
                 // Cykl: Name(0) -> ProductId(1) -> NearestExpiry(2)
                 _simpleSort = (SimpleSortMode)(((int)_simpleSort + 1) % 3);
             }
-            else // HubMode.Products
+            else if (_hubMode == HubMode.Products)
             {
-                // Cykl tylko między Name a ProductId
                 if (_simpleSort == SimpleSortMode.Name) _simpleSort = SimpleSortMode.ProductId;
                 else _simpleSort = SimpleSortMode.Name;
+            }
+            else if (_hubMode == HubMode.Analysis)
+            {
+                CycleAnalysisView();
             }
 
             UpdateSortLabel();
@@ -2880,9 +2878,12 @@ namespace StatisticMod
                     _ => _statsSortMode.ToString()
                 };
             }
+            else if (_hubMode == HubMode.Analysis)
+            {
+                modeText = GetAnalysisSortLabel();
+            }
             else
             {
-                // Tryb Terminy lub Produkty - używamy _simpleSort
                 modeText = _simpleSort switch
                 {
                     SimpleSortMode.Name => Plugin.T("NAZWA", "NAME"),
@@ -2984,22 +2985,25 @@ namespace StatisticMod
 
         private void OnTogglePriceFilter()
         {
-            _onlyWithPrice = !_onlyWithPrice;
-            UpdateFilterButtonUI();
-            BuildAllProductsTilesNow(); // Odświeża listę z nowym filtrem
+            ToggleFilterDropdown();
         }
 
         private void UpdateFilterButtonUI()
         {
             if (_filterAvailableLabel == null) return;
 
-            // Tłumaczenie etykiety filtra: DOSTĘPNE/WSZYSTKO vs AVAILABLE/ALL
+            var img = _filterAvailableBtn.GetComponent<Image>();
+            if (_hubMode == HubMode.Analysis)
+            {
+                _filterAvailableLabel.text = $"{_analysisRangeDays} {Plugin.T("DNI", "DAYS")}";
+                if (img != null) img.color = new Color(0.2f, 0.75f, 1f, 0.20f);
+                return;
+            }
+
             _filterAvailableLabel.text = _onlyWithPrice
                 ? Plugin.T("DOSTĘPNE", "AVAILABLE")
                 : Plugin.T("WSZYSTKO", "ALL");
 
-            // Wizualna podpowiedź: zielony dla aktywnych, biały dla wszystkich
-            var img = _filterAvailableBtn.GetComponent<Image>();
             if (img != null)
             {
                 img.color = _onlyWithPrice
@@ -3025,8 +3029,9 @@ namespace StatisticMod
         }
         private void OnSearchValueChanged(string value)
         {
-            _searchFilter = value.ToLower();
-            BuildAllProductsTilesNow(); // Odświeżamy listę przy każdej zmianie litery
+            _searchFilter = value ?? string.Empty;
+            if (_hubMode == HubMode.Products || _hubMode == HubMode.Analysis)
+                BuildForHubMode();
         }
         private void EnterChartsLayout()
         {

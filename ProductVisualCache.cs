@@ -32,8 +32,6 @@ namespace StatisticMod
             try
             {
                 HashSet<int> seen = new HashSet<int>();
-
-                // 1. Bezpośredni natywny odczyt z publicznej listy m_Products
                 var products = idManager != null ? idManager.m_Products : null;
                 if (products != null)
                 {
@@ -41,18 +39,14 @@ namespace StatisticMod
                     {
                         var so = products[i];
                         if (so == null) continue;
-
                         int id = 0;
                         try { id = so.ID; } catch { }
-
                         if (id <= 0 || seen.Contains(id)) continue;
-
                         seen.Add(id);
                         AddProductSafe(so);
                     }
                 }
 
-                // 2. C4 FIX: Bezpośrednie odwołanie do m_ProductSODictionary bez uzywania powolnej refleksji
                 if (idManager != null && idManager.m_ProductSODictionary != null)
                 {
                     var dict = idManager.m_ProductSODictionary;
@@ -60,12 +54,9 @@ namespace StatisticMod
                     {
                         ProductSO so = entry.Value;
                         if (so == null) continue;
-
                         int realId = 0;
                         try { realId = so.ID; } catch { }
-
                         if (realId <= 0 || seen.Contains(realId)) continue;
-
                         seen.Add(realId);
                         AddProductSafe(so);
                     }
@@ -79,7 +70,6 @@ namespace StatisticMod
             ById[9999] = null;
             NameById[9999] = Plugin.T("Lody (Stoisko)", "Ice Cream (Stand)");
             IconById[9999] = EmbeddedIconLoader.LoadPngSprite("icecream");
-
             IsBuilt = true;
         }
 
@@ -92,24 +82,15 @@ namespace StatisticMod
             catch { return; }
 
             if (id <= 0 || ById.ContainsKey(id)) return;
-
             ById[id] = p;
 
-            string name = null;
-            try { name = p.TempProductName; } catch { }
-
-            if (string.IsNullOrEmpty(name))
-            {
-                try { name = p.ProductName; } catch { }
-            }
-
+            string name = Plugin.LocalizedProductName(id, p);
             NameById[id] = !string.IsNullOrEmpty(name)
                 ? $"{name} ID: {id}"
-                : $"Unknown ID: {id}";
+                : Plugin.UnknownId(id);
 
             Sprite icon = null;
             try { icon = p.ProductIcon; } catch { }
-
             IconById[id] = icon;
         }
 

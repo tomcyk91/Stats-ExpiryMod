@@ -4,14 +4,19 @@
     <TargetFramework>net6.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
+    <Version>2.4.2</Version>
+    <AssemblyVersion>2.4.2</AssemblyVersion>
+    <FileVersion>2.4.2</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
+    <None Remove="basket.obj" />
     <None Remove="icon.png" />
     <None Remove="SalesStats.png" />
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="basket.obj" />
     <EmbeddedResource Include="icecream.png">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </EmbeddedResource>
@@ -21,65 +26,76 @@
 
   <ItemGroup>
     <Reference Include="0Harmony">
-      <HintPath>C:\Program Files (x86)\Supermarket Simulator\BepInEx\core\0Harmony.dll</HintPath>
+      <HintPath>$(RefsRoot)\core\0Harmony.dll</HintPath>
     </Reference>
     <Reference Include="Assembly-CSharp">
-      <HintPath>..\..\..\..\..\Desktop 2\Supermarket Simulator\BepInEx\interop\Assembly-CSharp.dll</HintPath>
+      <HintPath>$(RefsRoot)\interop\Assembly-CSharp.dll</HintPath>
     </Reference>
     <Reference Include="BepInEx.Core">
-      <HintPath>C:\Program Files (x86)\Supermarket Simulator\BepInEx\core\BepInEx.Core.dll</HintPath>
+      <HintPath>$(RefsRoot)\core\BepInEx.Core.dll</HintPath>
     </Reference>
     <Reference Include="BepInEx.Unity.IL2CPP">
-      <HintPath>C:\Program Files (x86)\Supermarket Simulator\BepInEx\core\BepInEx.Unity.IL2CPP.dll</HintPath>
+      <HintPath>$(RefsRoot)\core\BepInEx.Unity.IL2CPP.dll</HintPath>
     </Reference>
     <Reference Include="Il2CppInterop.Runtime">
-      <HintPath>C:\Program Files (x86)\Supermarket Simulator\BepInEx\core\Il2CppInterop.Runtime.dll</HintPath>
+      <HintPath>$(RefsRoot)\core\Il2CppInterop.Runtime.dll</HintPath>
     </Reference>
     <Reference Include="Il2Cppmscorlib">
-      <HintPath>C:\Program Files (x86)\Supermarket Simulator\BepInEx\interop\Il2Cppmscorlib.dll</HintPath>
+      <HintPath>$(RefsRoot)\interop\Il2Cppmscorlib.dll</HintPath>
     </Reference>
     <Reference Include="MyBox">
-      <HintPath>bin\Debug\net6.0\MyBox.dll</HintPath>
+      <HintPath>$(RefsRoot)\interop\MyBox.dll</HintPath>
     </Reference>
     <Reference Include="Newtonsoft.Json">
-      <HintPath>C:\Program Files (x86)\Supermarket Simulator\BepInEx\interop\Newtonsoft.Json.dll</HintPath>
+      <HintPath>$(RefsRoot)\interop\Newtonsoft.Json.dll</HintPath>
     </Reference>
     <Reference Include="PhotonUnityNetworking">
-      <HintPath>C:\Program Files (x86)\Supermarket Simulator\BepInEx\interop\PhotonUnityNetworking.dll</HintPath>
+      <HintPath>$(RefsRoot)\interop\PhotonUnityNetworking.dll</HintPath>
     </Reference>
-    <Reference Include="Unity.InputSystem">
-      <HintPath>C:\Program Files (x86)\Supermarket Simulator\BepInEx\interop\Unity.InputSystem.dll</HintPath>
+    <Reference Include="Unity.
+    System">
+      <HintPath>$(RefsRoot)\interop\Unity.InputSystem.dll</HintPath>
     </Reference>
     <Reference Include="Unity.TextMeshPro">
-      <HintPath>C:\Program Files (x86)\Supermarket Simulator\BepInEx\interop\Unity.TextMeshPro.dll</HintPath>
+      <HintPath>$(RefsRoot)\interop\Unity.TextMeshPro.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
-      <HintPath>C:\Program Files (x86)\Supermarket Simulator\BepInEx\interop\UnityEngine.CoreModule.dll</HintPath>
+      <HintPath>$(RefsRoot)\interop\UnityEngine.CoreModule.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.ImageConversionModule">
-      <HintPath>C:\Program Files (x86)\Supermarket Simulator\BepInEx\interop\UnityEngine.ImageConversionModule.dll</HintPath>
+      <HintPath>$(RefsRoot)\interop\UnityEngine.ImageConversionModule.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.IMGUIModule">
-      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Supermarket Simulator\BepInEx\interop\UnityEngine.IMGUIModule.dll</HintPath>
+      <HintPath>$(RefsRoot)\interop\UnityEngine.IMGUIModule.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.InputLegacyModule">
-      <HintPath>C:\Program Files (x86)\Supermarket Simulator\BepInEx\interop\UnityEngine.InputLegacyModule.dll</HintPath>
+      <HintPath>$(RefsRoot)\interop\UnityEngine.InputLegacyModule.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.JSONSerializeModule">
-      <HintPath>C:\Program Files (x86)\Supermarket Simulator\BepInEx\interop\UnityEngine.JSONSerializeModule.dll</HintPath>
+      <HintPath>$(RefsRoot)\interop\UnityEngine.JSONSerializeModule.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.PhysicsModule">
-      <HintPath>bin\Debug\net6.0\UnityEngine.PhysicsModule.dll</HintPath>
+      <HintPath>$(RefsRoot)\interop\UnityEngine.PhysicsModule.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.TextRenderingModule">
-      <HintPath>C:\Program Files (x86)\Supermarket Simulator\BepInEx\interop\UnityEngine.TextRenderingModule.dll</HintPath>
+      <HintPath>$(RefsRoot)\interop\UnityEngine.TextRenderingModule.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.UI">
-      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Supermarket Simulator\BepInEx\interop\UnityEngine.UI.dll</HintPath>
+      <HintPath>$(RefsRoot)\interop\UnityEngine.UI.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.UIModule">
-      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Supermarket Simulator\BepInEx\interop\UnityEngine.UIModule.dll</HintPath>
+      <HintPath>$(RefsRoot)\interop\UnityEngine.UIModule.dll</HintPath>
     </Reference>
   </ItemGroup>
+
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <Exec Command="copy /Y &quot;$(TargetPath)&quot; &quot;$(GameRoot)\BepInEx\plugins&quot;" />
+  </Target>
+
+  <!-- Portable cloud paths (SupermarketSimulator_Dev) -->
+  <PropertyGroup Label="CloudPaths">
+    <RefsRoot>$(MSBuildProjectDirectory)\..\..\References\BepInEx</RefsRoot>
+    <GameRoot>$(MSBuildProjectDirectory)\..\..\Game</GameRoot>
+  </PropertyGroup>
 
 </Project>

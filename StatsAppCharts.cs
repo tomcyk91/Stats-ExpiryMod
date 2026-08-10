@@ -153,6 +153,9 @@ namespace StatisticMod
             // =========================================================
             _chartMetric = Metric.SoldAmount; // Ustawienie trybu na "Sprzedane"
             _metricCycleIndex = 0;            // Wyzerowanie licznika kliknięć
+            _chartScope = ChartScope.Product;
+            _summaryMetric = SummaryMetric.TotalCustomers;
+            _summaryMetricCycleIndex = 0;
             // =========================================================
 
             // charts should NOT scroll
@@ -225,6 +228,22 @@ namespace StatisticMod
             h1.childForceExpandWidth = true;
             h1.childForceExpandHeight = true;
 
+            // Left 0: przełącznik zakresu PRODUKT / SKLEP
+            var scopeRoot = new GameObject("Left_Scope");
+            scopeRoot.transform.SetParent(row1.transform, false);
+            var leScope = scopeRoot.AddComponent<LayoutElement>();
+            leScope.preferredWidth = 175;
+            leScope.flexibleWidth = 0;
+            scopeRoot.AddComponent<Image>().color = new Color(0f, 0f, 0.3774f, 1f);
+
+            var scopeV = scopeRoot.AddComponent<VerticalLayoutGroup>();
+            scopeV.childControlWidth = true;
+            scopeV.childControlHeight = true;
+            scopeV.childForceExpandWidth = true;
+            scopeV.childForceExpandHeight = true;
+
+            BuildChartScopeButton(scopeRoot.transform, height: 55);
+
             // Left: product picker
             var left = new GameObject("Left_Product");
             left.transform.SetParent(row1.transform, false);
@@ -232,6 +251,7 @@ namespace StatisticMod
             leLeft.flexibleWidth = 1;
             leLeft.minWidth = 360;
             left.AddComponent<Image>().color = new Color(0f, 0f, 0.3774f, 1f);
+            _chartProductPickerRoot = left;
 
             var leftV = left.AddComponent<VerticalLayoutGroup>();
             leftV.childControlWidth = true;
@@ -256,6 +276,7 @@ namespace StatisticMod
             // Budujemy elementy z nową wysokością 55
             BuildProductPicker(left.transform, pickerHeight: 55);
             BuildCategoryCycleButton(right.transform, height: 55);
+            UpdateChartScopeVisuals();
 
             // Row2: range buttons (7 / 14 / 30 dni)
             var row2 = new GameObject("Row2");
@@ -574,13 +595,7 @@ namespace StatisticMod
 
             _categoryCycleBtn.onClick.AddListener((Action)(() =>
             {
-                _metricCycleIndex++;
-                if (_metricCycleIndex >= _metricCycle.Length) _metricCycleIndex = 0;
-
-                _chartMetric = _metricCycle[_metricCycleIndex];
-                UpdateCategoryCycleLabel();
-                UpdateChartHeader();
-                RefreshChart();
+                OnChartCategoryClicked();
             }));
 
             UpdateCategoryCycleLabel();
@@ -605,7 +620,7 @@ namespace StatisticMod
             // Tłumaczenie etykiety "Kategoria" / "Category"
             string prefix = Plugin.T("Kategoria", "Category");
 
-            _categoryCycleLabel.text = $"{prefix}: {GetMetricLabel(_chartMetric)}";
+            _categoryCycleLabel.text = $"{prefix}: {GetActiveChartMetricLabel()}";
         }
 
         private void BuildChartProductSelector(Transform parent)
@@ -1022,7 +1037,7 @@ namespace StatisticMod
         private void UpdateChartHeader()
         {
             if (_chartTitleTmp == null) return;
-            _chartTitleTmp.text = $"{Plugin.T("Wyniki w czasie", "Results over time")} — {GetMetricLabel(_chartMetric)}";
+            _chartTitleTmp.text = GetChartHeaderText();
         }
 
         private void RefreshChart()
@@ -1032,6 +1047,12 @@ namespace StatisticMod
             // 1. Czyszczenie starych słupków
             for (int i = _chartBarsContainer.childCount - 1; i >= 0; i--)
                 UnityEngine.Object.Destroy(_chartBarsContainer.GetChild(i).gameObject);
+
+            if (_chartScope == ChartScope.Store)
+            {
+                RefreshStoreSummaryChart();
+                return;
+            }
 
             // ZGODNIE Z ŻYCZENIEM: Pusty wykres na start
             if (_chartSelectedProductId <= 0) return;
@@ -1193,6 +1214,12 @@ namespace StatisticMod
         private void UpdateLegendCategoryMode()
         {
             if (_legendTextTmp == null && _chartLegendTmp == null) return;
+
+            if (_chartScope == ChartScope.Store)
+            {
+                UpdateStoreSummaryLegend();
+                return;
+            }
 
             Color col = GetMetricColor(_chartMetric);
             if (_legendSwatchImg != null) _legendSwatchImg.color = new Color(col.r, col.g, col.b, 0.95f);

@@ -251,6 +251,10 @@ namespace SmartExpiration
 
         public static void LoadData()
         {
+            // Reset jest ważny przy zmianie slotu oraz przy ponownym ładowaniu zapisu.
+            SaveDataInitialized = false;
+            SaveLoaded = false;
+
             slotDates.Clear();
             boxDates.Clear();
             boxDeliveryDays.Clear();
@@ -263,75 +267,156 @@ namespace SmartExpiration
             try
             {
                 CustomExpirationLoader.Load();
-                StatisticMod.Plugin.DebugLog("[LoadData] CustomExpirationLoader.Load() called at start of LoadData()");
+                StatisticMod.Plugin.DebugLog("[LoadData] Custom expiration configuration loaded.");
             }
             catch (Exception ex)
             {
-                StatisticMod.Plugin.DebugLog($"[LoadData] Error calling CustomExpirationLoader.Load(): {ex.Message}");
+                StatisticMod.Plugin.DebugWarning(
+                    $"[LoadData] Custom expiration configuration error: {ex.Message}");
             }
 
             string fileToLoad = null;
             bool migratedFromLegacy = false;
 
-            if (File.Exists(NewSaveFilePath)) fileToLoad = NewSaveFilePath;
-            else if (File.Exists(LegacySaveFilePath)) { fileToLoad = LegacySaveFilePath; migratedFromLegacy = true; }
+            if (File.Exists(NewSaveFilePath))
+            {
+                fileToLoad = NewSaveFilePath;
+            }
+            else if (File.Exists(LegacySaveFilePath))
+            {
+                fileToLoad = LegacySaveFilePath;
+                migratedFromLegacy = true;
+            }
             else
             {
-                StatisticMod.Plugin.DebugLog("[LoadData] No save file found.");
+                // Brak pliku jest prawidłowym stanem nowego zapisu.
+                // Finalizer nie powinien w takim przypadku czekać pełnego timeoutu.
+                SaveDataInitialized = true;
+                SaveLoaded = true;
+                StatisticMod.Plugin.DebugLog(
+                    "[LoadData] No expiration save file found. New empty state initialized.");
                 return;
             }
 
+            bool detailedLogs = false;
             try
             {
-                string[] lines = File.ReadAllLines(fileToLoad);
+                detailedLogs = PluginConfig.DetailedLoadLogs != null &&
+                               PluginConfig.DetailedLoadLogs.Value;
+            }
+            catch
+            {
+                detailedLogs = false;
+            }
 
-                foreach (string line in lines)
+            int loadedPboxRecords = 0;
+            int loadedLegacyBoxes = 0;
+            int loadedSlots = 0;
+            int skippedLines = 0;
+            int malformedLines = 0;
+
+            try
+            {
+                // ReadLines nie tworzy od razu dużej tablicy wszystkich wpisów.
+                foreach (string line in File.ReadLines(fileToLoad))
                 {
                     try
                     {
-                        if (string.IsNullOrWhiteSpace(line) || !line.Contains("|")) continue;
+                        if (string.IsNullOrWhiteSpace(line) || !line.Contains("|"))
+                        {
+                            skippedLines++;
+                            continue;
+                        }
+
                         string[] parts = line.Split('|');
 
                         if (parts[0] == "PBOX" && parts.Length >= 3)
                         {
-                            if (int.TryParse(parts[1], out int productId))
+                            if (!int.TryParse(parts[1], out int productId) || productId <= 0)
                             {
-                                List<int> dates = ParseCsvInts(parts[2]);
-                                int deliveryDay = parts.Length >= 4 ? int.Parse(parts[3]) : 1;
+                                malformedLines++;
+                                continue;
+                            }
 
-                                if (!pendingLoadedBoxes.ContainsKey(productId))
-                                    pendingLoadedBoxes[productId] = new Queue<SavedBoxData>();
+                            List<int> dates = ParseCsvInts(parts[2]);
+                            int deliveryDay = 1;
+                            if (parts.Length >= 4)
+                                int.TryParse(parts[3], out deliveryDay);
+                            if (deliveryDay < 1) deliveryDay = 1;
 
-                                pendingLoadedBoxes[productId].Enqueue(new SavedBoxData { Dates = dates, DeliveryDay = deliveryDay });
-                                StatisticMod.Plugin.DebugLog($"[LoadData] Enqueued PBOX for productId={productId} datesCount={dates.Count} deliveryDay={deliveryDay}");
+                            if (!pendingLoadedBoxes.ContainsKey(productId))
+                                pendingLoadedBoxes[productId] = new Queue<SavedBoxData>();
+
+                            pendingLoadedBoxes[productId].Enqueue(
+                                new SavedBoxData
+                                {
+                                    Dates = dates,
+                                    DeliveryDay = deliveryDay
+                                });
+
+                            loadedPboxRecords++;
+
+                            if (detailedLogs)
+                            {
+                                StatisticMod.Plugin.DebugLog(
+                                    $"[LoadData] PBOX productId={productId} " +
+                                    $"dates={dates.Count} deliveryDay={deliveryDay}");
                             }
                         }
                         else if (parts[0] == "BOX" && parts.Length >= 3)
                         {
-                            if (int.TryParse(parts[1], out int boxUID))
+                            if (!int.TryParse(parts[1], out int boxUID) || boxUID <= 0)
                             {
-                                if (boxUID > 0)
-                                {
-                                    boxDates[boxUID] = ParseCsvInts(parts[2]);
-                                    if (parts.Length >= 4 && int.TryParse(parts[3], out int deliveryDay))
-                                    {
-                                        boxDeliveryDays[boxUID] = deliveryDay;
-                                    }
-                                    StatisticMod.Plugin.DebugLog($"[LoadData] Loaded BOX uid={boxUID} datesCount={boxDates[boxUID].Count}");
-                                }
+                                malformedLines++;
+                                continue;
+                            }
+
+                            boxDates[boxUID] = ParseCsvInts(parts[2]);
+
+                            if (parts.Length >= 4 &&
+                                int.TryParse(parts[3], out int deliveryDay) &&
+                                deliveryDay > 0)
+                            {
+                                boxDeliveryDays[boxUID] = deliveryDay;
+                            }
+
+                            loadedLegacyBoxes++;
+
+                            if (detailedLogs)
+                            {
+                                StatisticMod.Plugin.DebugLog(
+                                    $"[LoadData] BOX uid={boxUID} dates={boxDates[boxUID].Count}");
                             }
                         }
                         else if (parts.Length == 2)
                         {
                             string path = parts[0];
+                            if (string.IsNullOrEmpty(path))
+                            {
+                                malformedLines++;
+                                continue;
+                            }
+
                             List<int> loadedList = ParseCsvInts(parts[1]);
                             slotDates[path] = loadedList;
-                            StatisticMod.Plugin.DebugLog($"[LoadData] Loaded slotDates for path={path} count={loadedList.Count}");
+                            loadedSlots++;
+
+                            if (detailedLogs)
+                            {
+                                StatisticMod.Plugin.DebugLog(
+                                    $"[LoadData] SLOT path={path} dates={loadedList.Count}");
+                            }
+                        }
+                        else
+                        {
+                            malformedLines++;
                         }
                     }
                     catch (Exception ex)
                     {
-                        StatisticMod.Plugin.Log.LogWarning($"[LoadData] Błąd przetwarzania linii {line}: {ex.Message}");
+                        malformedLines++;
+                        StatisticMod.Plugin.DebugWarning(
+                            $"[LoadData] Invalid record skipped: {ex.Message}");
                     }
                 }
 
@@ -340,22 +425,37 @@ namespace SmartExpiration
                     try
                     {
                         string dir = Path.GetDirectoryName(NewSaveFilePath);
-                        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                            Directory.CreateDirectory(dir);
+
                         File.Copy(LegacySaveFilePath, NewSaveFilePath, true);
                         File.Delete(LegacySaveFilePath);
+                        StatisticMod.Plugin.DebugLog("[LoadData] Legacy save migrated.");
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        StatisticMod.Plugin.DebugWarning(
+                            $"[LoadData] Legacy migration warning: {ex.Message}");
+                    }
                 }
 
+                // Ponowne odczytanie po migracji zachowuje dotychczasowe zachowanie moda.
                 CustomExpirationLoader.Load();
+
                 SaveDataInitialized = true;
                 SaveLoaded = true;
 
-                StatisticMod.Plugin.DebugLog($"[LoadData] DONE. pendingLoadedBoxes={pendingLoadedBoxes.Count} boxDates={boxDates.Count} slotDates={slotDates.Count}");
+                StatisticMod.Plugin.DebugLog(
+                    $"[LoadData] DONE. slots={loadedSlots}, pboxRecords={loadedPboxRecords}, " +
+                    $"legacyBoxes={loadedLegacyBoxes}, productQueues={pendingLoadedBoxes.Count}, " +
+                    $"skipped={skippedLines}, malformed={malformedLines}");
             }
             catch (Exception ex)
             {
-                StatisticMod.Plugin.Log.LogError($"[LoadData] BŁĄD ODCZYTU GŁÓWNEGO: {ex}");
+                SaveDataInitialized = false;
+                SaveLoaded = false;
+                StatisticMod.Plugin.Log.LogError(
+                    $"[LoadData] BŁĄD ODCZYTU GŁÓWNEGO: {ex}");
             }
         }
 

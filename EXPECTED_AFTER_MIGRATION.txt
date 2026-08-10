@@ -1,0 +1,22 @@
+Kontrola na podstawie przesłanych plików
+========================================
+
+Po pierwszym uruchomieniu na dniu 2 oczekiwany układ JSON:
+
+SchemaVersion: 2
+Days:          tylko Day 1
+OpenDay:       Day 2 (27 wizyt zapisanych w obecnym pliku)
+
+Sprzedaż Day 1 uzgodniona z TSV:
+SoldUnits:     1548
+SoldWeightKg:  231.2798
+SoldRevenue:   suma ProductLine = ok. 12676.1125
+               nagłówek DAY w TSV = 12676.115
+               niewielka różnica wynika z sumowania i zaokrągleń float.
+
+ProductId 9999:
+RequestedUnits: 107
+PickedUnits:    107
+SoldUnits:      107
+SoldRevenue:    267
+MissedUnits:    0

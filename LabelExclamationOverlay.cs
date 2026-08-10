@@ -1,4 +1,4 @@
-﻿#nullable disable
+#nullable disable
 
 using UnityEngine;
 using System;
@@ -9,88 +9,177 @@ using Il2CppInterop.Runtime.InteropTypes.Arrays;
 
 namespace SmartExpiration
 {
+    /// <summary>
+    /// Zdarzeniowy system trójkątów ostrzegawczych bez skanowania w trakcie dnia.
+    ///
+    /// Pełny przebieg półek wykonywany jest wyłącznie:
+    /// 1) po wczytaniu zapisu (plus jeden krótki przebieg poprawkowy po 1 s),
+    /// 2) po zmianie numeru dnia,
+    /// 3) po ręcznym RequestFullRefresh().
+    ///
+    /// W trakcie dnia aktualizowane są tylko konkretne sloty zmienione przez
+    /// DisplaySlot.AddProduct / TakeProductFromDisplay albo operacje koszyka.
+    /// Nie ma już okresowego skanu bezpieczeństwa ani odświeżania cache co 2 s.
+    /// </summary>
     public static class LabelExclamationOverlay
     {
-        private static float _refreshTimer = 0f;
+        private sealed class SlotVisualState
+        {
+            public DisplaySlot Slot;
+            public Transform Anchor;
+            public Transform Marker;
+            public bool MarkerLookupDone;
+        }
+
         private static Sprite _iconSprite;
+        private static Material _sharedSpriteMaterial;
+        private static Material _sharedLineMaterial;
+
+        private static readonly Queue<DisplaySlot> _dirtySlots = new Queue<DisplaySlot>();
+        private static readonly HashSet<int> _queuedSlotIds = new HashSet<int>();
+        private static readonly Dictionary<int, SlotVisualState> _slotStates = new Dictionary<int, SlotVisualState>();
+
         private static DisplaySlot[] _cachedSlots = new DisplaySlot[0];
-        private static float _cacheTimer = 0f;
-        private static readonly Dictionary<int, int> _slotChildCounts = new Dictionary<int, int>();
-        private static int _lastScanDay = -1;
-        private static int _batchCursor = 0;
-        private const int BatchSize = 12;
+        private static int _lastDay = -1;
+        private static bool _saveWasLoaded = false;
+        private static bool _lastShowTriangles = true;
+        private static bool _fullRefreshRequested = false;
+
+        // Jednorazowy drugi przebieg po załadowaniu zapisu. Nie jest to skan cykliczny;
+        // ma tylko złapać półki utworzone chwilę po ustawieniu SaveLoaded=true.
+        private static float _postLoadRescanAt = -1f;
+        private static float _nextAnimationTick = 0f;
+        private static float _animTime = 0f;
+
+        // Maksymalny czas pracy kolejki markerów w jednej klatce.
+        // Dzięki temu nawet duży sklep nie powinien dostać jednorazowego hitcha.
+        private const double DirtyQueueBudgetMs = 0.70;
+        private const int MaxDirtySlotsPerFrame = 12;
+
+        // Animacja nie musi działać 60-120 razy na sekundę.
+        private const float AnimationInterval = 0.08f;
 
         public static List<Transform> ActiveMarkers = new List<Transform>();
-        private static readonly Dictionary<Transform, LineRenderer> _markerLineRenderers = new Dictionary<Transform, LineRenderer>();
-        private static float _animTime = 0f;
 
         private static Sprite GetEmbeddedIcon()
         {
             if (_iconSprite != null) return _iconSprite;
+
             try
             {
                 Assembly assembly = Assembly.GetExecutingAssembly();
-                string resourceName = assembly.GetManifestResourceNames().FirstOrDefault(r => r.EndsWith("icon.png", StringComparison.OrdinalIgnoreCase));
+                string resourceName = assembly.GetManifestResourceNames()
+                    .FirstOrDefault(r => r.EndsWith("icon.png", StringComparison.OrdinalIgnoreCase));
+
                 if (string.IsNullOrEmpty(resourceName)) return null;
 
                 using var stream = assembly.GetManifestResourceStream(resourceName);
-                byte[] ba = new byte[stream.Length];
-                stream.Read(ba, 0, ba.Length);
+                if (stream == null) return null;
+
+                byte[] bytes = new byte[stream.Length];
+                stream.Read(bytes, 0, bytes.Length);
 
                 Texture2D tex = new Texture2D(2, 2);
-                tex.hideFlags = HideFlags.DontUnloadUnusedAsset; // A5 FIX
+                tex.hideFlags = HideFlags.DontUnloadUnusedAsset;
+                ImageConversion.LoadImage(tex, (Il2CppStructArray<byte>)bytes);
 
-                ImageConversion.LoadImage(tex, (Il2CppStructArray<byte>)ba); // A6 FIX
+                _iconSprite = Sprite.Create(
+                    tex,
+                    new Rect(0, 0, tex.width, tex.height),
+                    new Vector2(0.5f, 0.5f),
+                    100f);
 
-                _iconSprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
-                _iconSprite.hideFlags = HideFlags.HideAndDontSave; // A5 FIX
+                _iconSprite.hideFlags = HideFlags.HideAndDontSave;
                 return _iconSprite;
             }
-            catch { return null; }
+            catch
+            {
+                return null;
+            }
         }
 
-        private static void AddExclamation(GameObject parent, DisplaySlot slot)
+        private static Material GetSharedSpriteMaterial()
         {
+            if (_sharedSpriteMaterial != null) return _sharedSpriteMaterial;
+
             try
             {
-                var root = new GameObject("ExpiryExclamation");
-                SEProfiler.MarkerCount++;
-                root.transform.SetParent(parent.transform, false);
+                Shader shader = Shader.Find("Sprites/Default");
+                if (shader == null) return null;
 
+                _sharedSpriteMaterial = new Material(shader);
+                _sharedSpriteMaterial.name = "ExpiryWarning_SharedSpriteMaterial";
+                _sharedSpriteMaterial.hideFlags = HideFlags.DontUnloadUnusedAsset;
+                _sharedSpriteMaterial.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.Always);
+                _sharedSpriteMaterial.SetInt("_ZWrite", 0);
+                _sharedSpriteMaterial.renderQueue = 4000;
+            }
+            catch
+            {
+                _sharedSpriteMaterial = null;
+            }
+
+            return _sharedSpriteMaterial;
+        }
+
+        private static Material GetSharedLineMaterial()
+        {
+            if (_sharedLineMaterial != null) return _sharedLineMaterial;
+
+            try
+            {
+                Shader shader = Shader.Find("UI/Default");
+                if (shader == null) shader = Shader.Find("Sprites/Default");
+                if (shader == null) shader = Shader.Find("Universal Render Pipeline/Unlit");
+                if (shader == null) return null;
+
+                _sharedLineMaterial = new Material(shader);
+                _sharedLineMaterial.name = "ExpiryWarning_SharedLineMaterial";
+                _sharedLineMaterial.hideFlags = HideFlags.DontUnloadUnusedAsset;
+                _sharedLineMaterial.renderQueue = 4000;
+                _sharedLineMaterial.SetInt("_ZTest", 8);
+                _sharedLineMaterial.SetInt("_ZWrite", 0);
+                _sharedLineMaterial.color = Color.red;
+            }
+            catch
+            {
+                _sharedLineMaterial = null;
+            }
+
+            return _sharedLineMaterial;
+        }
+
+        private static Transform AddExclamation(Transform anchor)
+        {
+            if (anchor == null) return null;
+
+            try
+            {
+                GameObject root = new GameObject("ExpiryExclamation");
+                root.hideFlags = HideFlags.HideAndDontSave;
+                root.transform.SetParent(anchor, false);
                 root.transform.localPosition = new Vector3(0.01f, 0.005f, -0.12f);
                 root.transform.localScale = Vector3.one * 0.008f;
                 root.transform.localRotation = Quaternion.Euler(0f, 270f, 0f);
 
-                var renderer = root.AddComponent<SpriteRenderer>();
+                SpriteRenderer renderer = root.AddComponent<SpriteRenderer>();
                 renderer.sprite = GetEmbeddedIcon();
-                if (renderer.sprite == null) renderer.color = Color.red;
+                renderer.color = renderer.sprite != null ? Color.white : Color.red;
 
-                var shader = Shader.Find("Sprites/Default");
-                if (shader != null)
-                {
-                    var mat = new Material(shader);
-                    mat.hideFlags = HideFlags.DontUnloadUnusedAsset; // A5 FIX: Ochrona materiału
-                    mat.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.Always);
-                    renderer.material = mat;
-                }
-
-                // A4 FIX: Wyplenienie operatora ?? na obiektach Unity
-                Shader lineShader = Shader.Find("UI/Default");
-                if (lineShader == null) lineShader = Shader.Find("Sprites/Default");
-                if (lineShader == null) lineShader = Shader.Find("Universal Render Pipeline/Unlit");
-
-                Material lineMat = new Material(lineShader);
-                lineMat.hideFlags = HideFlags.DontUnloadUnusedAsset; // A5 FIX
-                lineMat.renderQueue = 4000;
-                lineMat.SetInt("_ZTest", 8);
-                lineMat.SetInt("_ZWrite", 0);
-                lineMat.EnableKeyword("_EMISSION");
+                Material spriteMaterial = GetSharedSpriteMaterial();
+                if (spriteMaterial != null)
+                    renderer.sharedMaterial = spriteMaterial;
 
                 LineRenderer lineRenderer = root.AddComponent<LineRenderer>();
                 lineRenderer.alignment = LineAlignment.Local;
                 lineRenderer.useWorldSpace = false;
                 lineRenderer.positionCount = 4;
-                lineRenderer.material = lineMat;
+                lineRenderer.startColor = Color.red;
+                lineRenderer.endColor = Color.red;
+
+                Material lineMaterial = GetSharedLineMaterial();
+                if (lineMaterial != null)
+                    lineRenderer.sharedMaterial = lineMaterial;
 
                 float sizeX = 1f;
                 float sizeY = 1f;
@@ -105,7 +194,7 @@ namespace SmartExpiration
                 lineRenderer.startWidth = lineWidth;
                 lineRenderer.endWidth = lineWidth;
 
-                float bottomY = -sizeY * 1f;
+                float bottomY = -sizeY;
                 float bottomWidth = sizeX * 0.7f;
 
                 lineRenderer.SetPosition(0, new Vector3(-bottomWidth, bottomY, 0f));
@@ -114,116 +203,376 @@ namespace SmartExpiration
                 lineRenderer.SetPosition(3, new Vector3(-bottomWidth, bottomY, 0f));
 
                 ActiveMarkers.Add(root.transform);
+                SEProfiler.MarkerCount++;
+                return root.transform;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Oznacza pojedynczy slot jako wymagający ponownego sprawdzenia.
+        /// Wywołanie jest tanie i de-duplikowane.
+        /// </summary>
+        public static void QueueSlot(DisplaySlot slot)
+        {
+            if (slot == null) return;
+
+            try
+            {
+                int id = slot.GetInstanceID();
+                if (_queuedSlotIds.Add(id))
+                    _dirtySlots.Enqueue(slot);
+            }
+            catch { }
+        }
+
+        private static void QueueAllSlots(bool clearExistingQueue)
+        {
+            if (clearExistingQueue)
+            {
+                _dirtySlots.Clear();
+                _queuedSlotIds.Clear();
+            }
+
+            DisplaySlot[] slots = _cachedSlots;
+            if (slots == null) return;
+
+            for (int i = 0; i < slots.Length; i++)
+            {
+                DisplaySlot slot = slots[i];
+                if (slot != null) QueueSlot(slot);
+            }
+        }
+
+        private static void RefreshCachedSlots(bool forceInvalidate)
+        {
+            try
+            {
+                if (forceInvalidate)
+                    SceneSlotCache.InvalidateSlots();
+
+                DisplaySlot[] newSlots = SceneSlotCache.GetSlots();
+                if (newSlots == null) newSlots = new DisplaySlot[0];
+
+                bool changed = !ReferenceEquals(newSlots, _cachedSlots) ||
+                               newSlots.Length != (_cachedSlots != null ? _cachedSlots.Length : 0);
+
+                _cachedSlots = newSlots;
+
+                if (changed || forceInvalidate)
+                    QueueAllSlots(forceInvalidate);
             }
             catch { }
         }
 
         public static void RefreshAll()
         {
-            _refreshTimer -= Time.deltaTime;
-            if (_refreshTimer > 0) return;
-            _refreshTimer = 2.0f;
-            long __pf = SEProfiler.Begin();
+            long profilerStart = SEProfiler.Begin();
+
             try
             {
-                _cachedSlots = SceneSlotCache.GetSlots();
+                bool saveLoaded = ExpirationSaveManager.SaveLoaded;
 
-                // C5 FIX: Bezpieczny odczyt natywnego singletona dnia
-                var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
-                int currentDay = dcm != null ? dcm.CurrentDay : 1;
-
-                bool showTriangles = PluginConfig.ShowWarningTriangles != null && PluginConfig.ShowWarningTriangles.Value;
-
-                if (currentDay != _lastScanDay)
+                if (!saveLoaded)
                 {
-                    _lastScanDay = currentDay;
-                    _slotChildCounts.Clear();
-                    _batchCursor = 0;
+                    if (_saveWasLoaded)
+                        ResetRuntimeState(true);
+
+                    _saveWasLoaded = false;
+                    return;
                 }
 
-                int total = _cachedSlots != null ? _cachedSlots.Length : 0;
-                if (total == 0) return;
-                if (_batchCursor >= total) _batchCursor = 0;
+                float now = Time.realtimeSinceStartup;
 
-                int examined = 0;
-                int processed = 0;
-                int idx = _batchCursor;
-
-                while (examined < total && processed < BatchSize)
+                if (!_saveWasLoaded)
                 {
-                    var slot = _cachedSlots[idx];
-                    idx++; if (idx >= total) idx = 0;
-                    examined++;
+                    _saveWasLoaded = true;
+                    _lastDay = -1;
+                    _fullRefreshRequested = true;
+                    _postLoadRescanAt = now + 1.0f;
+                }
 
-                    if (slot == null || !slot.HasProduct) continue;
+                bool showTriangles = PluginConfig.ShowWarningTriangles != null &&
+                                     PluginConfig.ShowWarningTriangles.Value;
 
-                    int instanceId = slot.GetInstanceID();
-                    int currentChildren = slot.transform.childCount;
+                if (!showTriangles)
+                {
+                    if (_lastShowTriangles || ActiveMarkers.Count > 0)
+                        RemoveAllMarkers();
 
-                    int prevChildren;
-                    bool unchanged = _slotChildCounts.TryGetValue(instanceId, out prevChildren) && prevChildren == currentChildren;
-                    if (unchanged) continue;
-                    _slotChildCounts[instanceId] = currentChildren;
-                    processed++;
+                    _lastShowTriangles = false;
+                    return;
+                }
 
-                    var labelComponent = slot.GetComponentInChildren<Label>();
-                    if (labelComponent == null) continue;
+                if (!_lastShowTriangles)
+                {
+                    _lastShowTriangles = true;
+                    _fullRefreshRequested = true;
+                }
 
-                    Transform anchor = labelComponent.transform;
-                    var marker = anchor.Find("ExpiryExclamation");
+                int currentDay = 1;
+                try
+                {
+                    var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
+                    currentDay = dcm != null ? dcm.CurrentDay : 1;
+                }
+                catch { }
 
-                    bool isCritical = false;
+                // Jedyny automatyczny pełny przebieg w normalnej grze: zmiana dnia.
+                if (currentDay != _lastDay)
+                {
+                    _lastDay = currentDay;
+                    _fullRefreshRequested = true;
+                }
 
-                    if (showTriangles)
+                // Jednorazowa poprawka po wczytaniu, gdy część półek powstaje klatkę
+                // lub kilka klatek później. Po wykonaniu timer jest wyłączony.
+                if (_postLoadRescanAt > 0f && now >= _postLoadRescanAt)
+                {
+                    _postLoadRescanAt = -1f;
+                    _fullRefreshRequested = true;
+                }
+
+                if (_fullRefreshRequested)
+                {
+                    _fullRefreshRequested = false;
+                    RefreshCachedSlots(true);
+                }
+
+                // W trakcie dnia kolejka zawiera wyłącznie sloty zgłoszone zdarzeniowo.
+                ProcessDirtyQueue(currentDay);
+            }
+            finally
+            {
+                SEProfiler.End("RefreshAll_EventOnly", profilerStart);
+            }
+        }
+
+        private static void ProcessDirtyQueue(int currentDay)
+        {
+            if (_dirtySlots.Count == 0) return;
+
+            long startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            double tickToMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            int processed = 0;
+
+            while (_dirtySlots.Count > 0 && processed < MaxDirtySlotsPerFrame)
+            {
+                DisplaySlot slot = _dirtySlots.Dequeue();
+
+                if (slot != null)
+                {
+                    try { _queuedSlotIds.Remove(slot.GetInstanceID()); } catch { }
+                    RefreshSlotInternal(slot, currentDay, true);
+                }
+
+                processed++;
+
+                double elapsedMs =
+                    (System.Diagnostics.Stopwatch.GetTimestamp() - startTicks) * tickToMs;
+
+                if (elapsedMs >= DirtyQueueBudgetMs)
+                    break;
+            }
+        }
+
+        // Wywoływane bezpośrednio po operacji koszyka. Jedno odświeżenie
+        // pojedynczego slotu jest tanie i daje natychmiastową reakcję UI.
+        public static void RefreshSlotNow(DisplaySlot slot)
+        {
+            if (slot == null) return;
+
+            try
+            {
+                int currentDay = 1;
+                var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
+                if (dcm != null) currentDay = dcm.CurrentDay;
+
+                bool showTriangles = PluginConfig.ShowWarningTriangles != null &&
+                                     PluginConfig.ShowWarningTriangles.Value;
+
+                RefreshSlotInternal(slot, currentDay, showTriangles);
+
+                try { _queuedSlotIds.Remove(slot.GetInstanceID()); } catch { }
+            }
+            catch { }
+        }
+
+        public static void RequestFullRefresh()
+        {
+            // Tylko ustawia flagę. Cięższa praca zostanie rozłożona przez kolejkę
+            // w Update ExpirationEngine, bez wykonywania jej wewnątrz patcha.
+            _fullRefreshRequested = true;
+        }
+
+        private static SlotVisualState GetOrCreateState(DisplaySlot slot)
+        {
+            int id = slot.GetInstanceID();
+            SlotVisualState state;
+
+            if (!_slotStates.TryGetValue(id, out state) || state == null)
+            {
+                state = new SlotVisualState();
+                _slotStates[id] = state;
+            }
+
+            state.Slot = slot;
+            return state;
+        }
+
+        private static Transform ResolveAnchor(SlotVisualState state, DisplaySlot slot)
+        {
+            if (state.Anchor != null) return state.Anchor;
+
+            try
+            {
+                Label label = slot.GetComponentInChildren<Label>(true);
+                if (label != null)
+                    state.Anchor = label.transform;
+            }
+            catch { }
+
+            return state.Anchor;
+        }
+
+        private static void RefreshSlotInternal(DisplaySlot slot, int currentDay, bool showTriangles)
+        {
+            if (slot == null) return;
+
+            try
+            {
+                SlotVisualState state = GetOrCreateState(slot);
+
+                Transform anchor = ResolveAnchor(state, slot);
+                if (anchor == null) return;
+
+                if (!state.MarkerLookupDone)
+                {
+                    state.MarkerLookupDone = true;
+                    try { state.Marker = anchor.Find("ExpiryExclamation"); } catch { }
+
+                    if (state.Marker != null && !ActiveMarkers.Contains(state.Marker))
+                        ActiveMarkers.Add(state.Marker);
+                }
+
+                bool hasProduct = false;
+                try { hasProduct = slot.HasProduct; } catch { }
+
+                if (!showTriangles || !hasProduct)
+                {
+                    RemoveMarker(state);
+                    return;
+                }
+
+                bool isCritical = false;
+                var expirationComponents =
+                    slot.GetComponentsInChildren<ProductExpirationComponent>(true);
+
+                // Jednorazowy fallback: jeżeli slot ma produkty, ale nie ma jeszcze
+                // żadnego komponentu terminu, zsynchronizuj go. W normalnej pracy
+                // nie wywołujemy już SyncShelf przy każdym sprawdzeniu.
+                if ((expirationComponents == null || expirationComponents.Count == 0) &&
+                    ExpirationSaveManager.SaveLoaded)
+                {
+                    ExpirationManager.SyncShelf(slot);
+                    expirationComponents =
+                        slot.GetComponentsInChildren<ProductExpirationComponent>(true);
+                }
+
+                if (expirationComponents != null)
+                {
+                    for (int i = 0; i < expirationComponents.Count; i++)
                     {
-                        var products = slot.GetComponentsInChildren<global::Product>();
-                        for (int i = 0; i < products.Count; i++)
+                        ProductExpirationComponent comp = expirationComponents[i];
+                        if (comp != null && comp.ExpirationDay - currentDay <= 0)
                         {
-                            var comp = products[i].GetComponent<ProductExpirationComponent>();
-                            if (comp != null && comp.ExpirationDay - currentDay <= 0)
-                            {
-                                isCritical = true;
-                                break;
-                            }
+                            isCritical = true;
+                            break;
                         }
                     }
-
-                    if (isCritical)
-                    {
-                        if (marker == null) AddExclamation(anchor.gameObject, slot);
-                    }
-                    else if (marker != null)
-                    {
-                        ActiveMarkers.Remove(marker);
-                        _markerLineRenderers.Remove(marker);
-                        UnityEngine.Object.Destroy(marker.gameObject);
-                        if (SEProfiler.MarkerCount > 0) SEProfiler.MarkerCount--;
-                    }
                 }
-                _batchCursor = idx;
+
+                if (isCritical)
+                {
+                    if (state.Marker == null)
+                        state.Marker = AddExclamation(anchor);
+                }
+                else
+                {
+                    RemoveMarker(state);
+                }
             }
-            finally { SEProfiler.End("RefreshAll", __pf); }
+            catch { }
+        }
+
+        private static void RemoveMarker(SlotVisualState state)
+        {
+            if (state == null || state.Marker == null) return;
+
+            Transform marker = state.Marker;
+            state.Marker = null;
+
+            ActiveMarkers.Remove(marker);
+
+            try { UnityEngine.Object.Destroy(marker.gameObject); } catch { }
+
+            if (SEProfiler.MarkerCount > 0)
+                SEProfiler.MarkerCount--;
+        }
+
+        private static void RemoveAllMarkers()
+        {
+            for (int i = ActiveMarkers.Count - 1; i >= 0; i--)
+            {
+                Transform marker = ActiveMarkers[i];
+                if (marker != null)
+                {
+                    try { UnityEngine.Object.Destroy(marker.gameObject); } catch { }
+                }
+            }
+
+            ActiveMarkers.Clear();
+
+            foreach (KeyValuePair<int, SlotVisualState> entry in _slotStates)
+            {
+                if (entry.Value != null)
+                    entry.Value.Marker = null;
+            }
+
+            SEProfiler.MarkerCount = 0;
+        }
+
+        private static void ResetRuntimeState(bool removeMarkers)
+        {
+            if (removeMarkers) RemoveAllMarkers();
+
+            _dirtySlots.Clear();
+            _queuedSlotIds.Clear();
+            _slotStates.Clear();
+            _cachedSlots = new DisplaySlot[0];
+            _lastDay = -1;
+            _fullRefreshRequested = false;
+            _postLoadRescanAt = -1f;
         }
 
         public static void AnimateMarkers()
         {
             if (ActiveMarkers.Count == 0) return;
 
-            _animTime += Time.deltaTime * 6f;
+            float now = Time.realtimeSinceStartup;
+            if (now < _nextAnimationTick) return;
+            _nextAnimationTick = now + AnimationInterval;
 
-            float scaleMult = 1.0f + (Mathf.Sin(_animTime) * 0.2f);
-            Vector3 targetScale = (Vector3.one * 0.008f) * scaleMult;
-
-            float glowPower = 5f;
-            float intensity = glowPower + Mathf.Sin(_animTime) * (glowPower * 0.3f);
-            float alpha = 0.8f + Mathf.Sin(_animTime) * 0.2f;
-
-            Color baseColor = Color.red;
-            Color pulseColor = new Color(baseColor.r * intensity, baseColor.g * intensity, baseColor.b * intensity, alpha);
+            _animTime += AnimationInterval * 6f;
+            float scaleMultiplier = 1.0f + Mathf.Sin(_animTime) * 0.2f;
+            Vector3 targetScale = Vector3.one * (0.008f * scaleMultiplier);
 
             for (int i = ActiveMarkers.Count - 1; i >= 0; i--)
             {
-                var marker = ActiveMarkers[i];
+                Transform marker = ActiveMarkers[i];
                 if (marker == null)
                 {
                     ActiveMarkers.RemoveAt(i);
@@ -231,20 +580,6 @@ namespace SmartExpiration
                 }
 
                 marker.localScale = targetScale;
-
-                LineRenderer lr;
-                if (!_markerLineRenderers.TryGetValue(marker, out lr))
-                {
-                    lr = marker.GetComponent<LineRenderer>();
-                    _markerLineRenderers[marker] = lr;
-                }
-
-                if (lr != null && lr.material != null)
-                {
-                    lr.startColor = pulseColor;
-                    lr.endColor = pulseColor;
-                    lr.material.color = pulseColor;
-                }
             }
         }
     }
@@ -253,48 +588,75 @@ namespace SmartExpiration
     {
         public ExpirationEngine(System.IntPtr ptr) : base(ptr) { }
 
-        private static Queue<DisplaySlot> _syncQueue = new Queue<DisplaySlot>();
+        private static readonly Queue<DisplaySlot> _syncQueue = new Queue<DisplaySlot>();
 
         public static void StartBackgroundSync()
         {
             _syncQueue.Clear();
-            // A2 PERF FIX: Skan natywny indeksowany zamiast powolnego foreach
-            var allSlots = UnityEngine.Object.FindObjectsOfType<DisplaySlot>();
-            if (allSlots != null)
+
+            // Wspólny cache zamiast kolejnego pełnego FindObjectsOfType.
+            DisplaySlot[] allSlots = SceneSlotCache.GetSlots();
+            if (allSlots == null) return;
+
+            for (int i = 0; i < allSlots.Length; i++)
             {
-                for (int i = 0; i < allSlots.Count; i++)
-                {
-                    var slot = allSlots[i];
-                    if (slot != null && slot.HasProduct) _syncQueue.Enqueue(slot);
-                }
+                DisplaySlot slot = allSlots[i];
+                if (slot != null && slot.HasProduct)
+                    _syncQueue.Enqueue(slot);
             }
         }
 
         private void Update()
         {
-            long __ef = SmartExpiration.SEProfiler.Begin();
+            long profilerStart = SmartExpiration.SEProfiler.Begin();
+
             try
             {
                 if (_syncQueue.Count > 0)
                 {
-                    int processLimit = 5;
+                    // Mniejsza porcja niż wcześniej; marker jest kolejkowany dopiero
+                    // po zakończeniu synchronizacji konkretnego slotu.
+                    int processLimit = 3;
+
                     while (_syncQueue.Count > 0 && processLimit > 0)
                     {
-                        var slot = _syncQueue.Dequeue();
-                        if (slot != null && slot.HasProduct) ExpirationManager.SyncShelf(slot);
+                        DisplaySlot slot = _syncQueue.Dequeue();
+
+                        if (slot != null && slot.HasProduct)
+                        {
+                            ExpirationManager.SyncShelf(slot);
+                            LabelExclamationOverlay.QueueSlot(slot);
+                        }
+
                         processLimit--;
                     }
                 }
 
                 LabelExclamationOverlay.RefreshAll();
-                long __am = SmartExpiration.SEProfiler.Begin();
                 LabelExclamationOverlay.AnimateMarkers();
-                SmartExpiration.SEProfiler.End("AnimateMarkers", __am);
 
                 SmartExpiration.Patches.RestockerScanner.Process();
             }
             catch { }
-            finally { SmartExpiration.SEProfiler.End("EngineUpdate", __ef); }
+            finally
+            {
+                SmartExpiration.SEProfiler.End("EngineUpdate", profilerStart);
+            }
+        }
+    }
+}
+
+namespace SmartExpiration.Patches
+{
+    /// <summary>
+    /// Lekki postfix dla natywnych zmian półki. Nie skanuje slotu w samym patchu;
+    /// tylko dodaje go do de-duplikowanej kolejki na następną klatkę.
+    /// </summary>
+    public static class ExpirationMarkerSlotChangedPatch
+    {
+        public static void Postfix(DisplaySlot __instance)
+        {
+            SmartExpiration.LabelExclamationOverlay.QueueSlot(__instance);
         }
     }
 }
