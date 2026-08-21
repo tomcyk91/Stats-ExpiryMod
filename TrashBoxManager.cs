@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 using HarmonyLib;
@@ -889,82 +889,43 @@ namespace SmartExpiration.Patches
 
                 int day = DayCycleManager.Instance != null ? DayCycleManager.Instance.CurrentDay : 1;
 
-                ExpirationManager.SyncShelf(slot);
-
-                var products = ExpirationSaveManager.GetSortedProducts(slot.transform);
-                List<int> remainingDates = new List<int>();
-
-                bool foundExpired = false;
-                int expiredDate = -1;
-
-                for (int i = 0; i < products.Count; i++)
-                {
-                    var p = products[i];
-                    var exp = p.GetComponent<ProductExpirationComponent>();
-
-                    if (exp != null)
-                    {
-                        int daysLeft = exp.ExpirationDay - day;
-
-                        if (!foundExpired && daysLeft <= 0)
-                        {
-                            foundExpired = true;
-                            expiredDate = exp.ExpirationDay;
-                        }
-                        else
-                        {
-                            remainingDates.Add(exp.ExpirationDay);
-                        }
-                    }
-                }
-
-                if (!foundExpired) return false;
+                // BUGFIX: do not scan an expired object and then remove an arbitrary fresh
+                // object. Move the selected expired DATE to the native last product first,
+                // then let DisplaySlot update all of its own internal counters/state.
+                if (!ExpirationManager.PrepareExpiredProductForNativeTake(slot, day, out int expiredDate))
+                    return false;
 
                 int safeProductId = slot.ProductID;
-                var takeMethod = AccessTools.Method(typeof(DisplaySlot), "TakeProductFromDisplay");
+                var pulled = slot.TakeProductFromDisplay();
 
-                if (takeMethod != null)
+                // This removal goes to the special trash basket, not to a normal product box.
+                // Do not leak the generic shelf->box clipboard into an unrelated later add.
+                BoxLabelPatch.ClipboardDate = -1;
+                BoxLabelPatch.ClipboardFrame = -1;
+
+                if (pulled != null)
                 {
-                    var result = takeMethod.Invoke(slot, null);
+                    var pulledExp = pulled.GetComponent<ProductExpirationComponent>();
+                    if (pulledExp != null) pulledExp.ExpirationDay = expiredDate;
 
-                    if (result != null)
-                    {
-                        IntPtr ptr = IL2CPP.Il2CppObjectBaseToPtrNotNull((Il2CppObjectBase)result);
-                        global::Product pulled = new global::Product(ptr);
+                    pulled.transform.SetParent(trash.transform);
+                    var rb = pulled.GetComponent<Rigidbody>();
+                    if (rb != null) rb.isKinematic = true;
+                    foreach (var c in pulled.GetComponentsInChildren<Collider>(true)) c.enabled = false;
 
-                        var pulledExp = pulled.GetComponent<ProductExpirationComponent>();
-                        if (pulledExp != null) pulledExp.ExpirationDay = expiredDate;
+                    int boxId = trash.GetInstanceID();
+                    TrashBoxState.StoreProduct(boxId, safeProductId, pulled);
+                    TrashBoxState.Sucking[boxId].Add(pulled);
 
-                        pulled.transform.SetParent(trash.transform);
-                        var rb = pulled.GetComponent<Rigidbody>();
-                        if (rb != null) rb.isKinematic = true;
-                        foreach (var c in pulled.GetComponentsInChildren<Collider>(true)) c.enabled = false;
-
-                        int boxId = trash.GetInstanceID();
-                        TrashBoxState.StoreProduct(boxId, safeProductId, pulled);
-                        TrashBoxState.Sucking[boxId].Add(pulled);
-
-                        _cooldown = Time.time + 0.12f;
-
-                        var remainingProducts = ExpirationSaveManager.GetSortedProducts(slot.transform);
-
-                        for (int i = 0; i < remainingProducts.Count && i < remainingDates.Count; i++)
-                        {
-                            var rComp = ExpirationManager.EnsureExpiration(remainingProducts[i], slot);
-                            if (rComp != null)
-                            {
-                                rComp.ExpirationDay = remainingDates[i];
-                            }
-                        }
-
-                        ExpirationManager.UpdateMemory(slot);
-                        LabelExclamationOverlay.RefreshSlotNow(slot);
-                    }
+                    _cooldown = Time.time + 0.12f;
+                    LabelExclamationOverlay.QueueSlot(slot);
                 }
+
                 return false;
             }
-            catch
+            catch (Exception ex)
             {
+                StatisticMod.Plugin.DebugWarning("[TrashBasket] Take expired product failed: " + ex.Message);
                 return false;
             }
         }

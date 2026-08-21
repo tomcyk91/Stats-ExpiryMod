@@ -189,7 +189,7 @@ namespace StatisticMod
             rtRoot.offsetMax = Vector2.zero;
 
             var rootV = rootGO.AddComponent<VerticalLayoutGroup>();
-            rootV.padding = new RectOffset(10, 10, 10, 10);
+            rootV.padding = new RectOffset(10, 10, 10, 18);
             rootV.spacing = 12; // Większy odstęp między wyszukiwarką a resztą
             rootV.childControlWidth = true;
             rootV.childControlHeight = true;
@@ -365,7 +365,9 @@ namespace StatisticMod
             rtBars.anchorMin = new Vector2(0f, 0f);
             rtBars.anchorMax = new Vector2(1f, 0.90f);
 
-            rtBars.offsetMin = new Vector2(10, 10);
+            // Pass 3d: stały margines pod osią X. To jest w rdzeniu wykresu,
+            // więc działa również po przełączeniu PRODUKT <-> SKLEP.
+            rtBars.offsetMin = new Vector2(10, 18);
             rtBars.offsetMax = new Vector2(-10, -10);
 
             _chartBarsContainer = barsRoot.transform;
@@ -733,12 +735,18 @@ namespace StatisticMod
 
                 CreateProductListButton(content, pName, pid, icon);
             }
+
+            // Lody (ID 9999) są produktem syntetycznym i nie występują w IDManager.m_Products.
+            // Dodajemy je ręcznie, aby były dostępne również na liście wyboru wykresu.
+            if (Plugin.ProductCache.TryGet(9999, out var iceCreamName, out var iceCreamIcon))
+                CreateProductListButton(content, iceCreamName, 9999, iceCreamIcon);
         }
 
         private void CreateProductListButton(Transform parent, string name, int id, Sprite icon)
         {
-            // Sprawdzanie, czy produkt jest odblokowany
-            if (!IsProductUnlocked(id))
+            // Sprawdzanie, czy produkt jest odblokowany.
+            // ID 9999 = Lody ze stoiska; nie posiada natywnej licencji produktu.
+            if (id != 9999 && !IsProductUnlocked(id))
             {
                 return;  // Jeśli produkt nie jest odblokowany, pomijamy tworzenie przycisku
             }
@@ -1110,7 +1118,7 @@ namespace StatisticMod
             {
                 float xCenter = (i + 0.5f) * groupW;
                 string lab = FormatMetricValue(_chartMetric, values[i], unit);
-                DrawBar(xCenter, 22f, barW, (rtC.rect.height - 38f) * 0.7f, values[i], maxAbs, GetMetricColor(_chartMetric), lab);
+                DrawBar(xCenter, 28f, barW, (rtC.rect.height - 52f) * 0.7f, values[i], maxAbs, GetMetricColor(_chartMetric), lab);
                 DrawDayLabel(xCenter, days[i], groupW);
             }
 
@@ -1180,7 +1188,8 @@ namespace StatisticMod
             rt.anchorMin = new Vector2(0, 0);
             rt.anchorMax = new Vector2(0, 0);
             rt.pivot = new Vector2(0.5f, 0);
-            rt.anchoredPosition = new Vector2(xCenter, 2f);
+            // Pass 3d: etykiety dni nie siedzą na dolnej krawędzi / nie są przycinane.
+            rt.anchoredPosition = new Vector2(xCenter, 8f);
             rt.sizeDelta = new Vector2(groupW, 18f);
         }
 

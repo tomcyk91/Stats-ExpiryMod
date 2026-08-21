@@ -1,4 +1,4 @@
-using Il2CppInterop.Runtime.Attributes;
+﻿using Il2CppInterop.Runtime.Attributes;
 using Il2CppInterop.Runtime.Injection;
 using UnityEngine;
 using System;
@@ -164,7 +164,8 @@ namespace StatisticMod
                     _slowTimer = 0f;
                     StatsAppManager.InstanceTryInstall();
                     BusinessAnalysisStore.TickPath();
-                    if (!_pendingDayChangeSave) BusinessAnalysisStore.SaveIfDirty();
+                    // PERF: no periodic JSON serialization/write during gameplay.
+                    // BusinessAnalysisStore is flushed by real game saves and day changes.
                 }
 
                 if (_pendingDayChangeSave && Time.realtimeSinceStartup >= _saveDayChangeAfter)

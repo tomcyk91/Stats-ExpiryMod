@@ -140,11 +140,11 @@ namespace StatisticMod
                 Math.Abs(summary.PaintCosts) +
                 Math.Abs(summary.FloorBoxCosts);
 
-            Color customersColor = new Color(0.25f, 0.72f, 1f, 1f);
-            Color positiveColor = new Color(0.35f, 0.90f, 0.48f, 1f);
-            Color warningColor = new Color(1f, 0.66f, 0.20f, 1f);
-            Color negativeColor = new Color(1f, 0.32f, 0.28f, 1f);
-            Color neutralColor = new Color(0.72f, 0.64f, 1f, 1f);
+            Color customersColor = StatsAppTheme.Info;
+            Color positiveColor = StatsAppTheme.Positive;
+            Color warningColor = StatsAppTheme.Warning;
+            Color negativeColor = StatsAppTheme.Negative;
+            Color neutralColor = StatsAppTheme.Purple;
 
             CreateDailySummaryCard(
                 Plugin.T("KLIENCI", "CUSTOMERS"),
@@ -281,35 +281,32 @@ namespace StatisticMod
             card.transform.SetParent(_tilesContent, false);
 
             var cardRT = card.AddComponent<RectTransform>();
-            cardRT.sizeDelta = new Vector2(205f, 90f);
+            cardRT.sizeDelta = new Vector2(StatsAppTheme.TileWidth, StatsAppTheme.TileHeight);
 
             card.AddComponent<CanvasRenderer>();
             var background = card.AddComponent<Image>();
-            background.color = new Color(0.055f, 0.176f, 0.271f, 1f);
+            background.color = StatsAppTheme.TileBackground;
             background.raycastTarget = false;
 
-            var layout = card.AddComponent<LayoutElement>();
-            layout.preferredWidth = 205f;
-            layout.preferredHeight = 90f;
+            var shadow = card.AddComponent<UnityEngine.UI.Shadow>();
+            shadow.effectColor = StatsAppTheme.Shadow;
+            shadow.effectDistance = new Vector2(2f, -2f);
+            shadow.useGraphicAlpha = true;
 
-            var shadow = new GameObject("Shadow");
-            shadow.transform.SetParent(card.transform, false);
-            shadow.transform.SetAsFirstSibling();
-            var shadowRT = shadow.AddComponent<RectTransform>();
-            shadowRT.anchorMin = Vector2.zero;
-            shadowRT.anchorMax = Vector2.one;
-            shadowRT.offsetMin = new Vector2(-3f, -5f);
-            shadowRT.offsetMax = new Vector2(3f, 3f);
-            shadow.AddComponent<CanvasRenderer>();
-            var shadowImage = shadow.AddComponent<Image>();
-            shadowImage.color = new Color(0f, 0f, 0f, 0.24f);
-            shadowImage.raycastTarget = false;
+            var outline = card.AddComponent<Outline>();
+            outline.effectColor = StatsAppTheme.TileBorder;
+            outline.effectDistance = new Vector2(1f, -1f);
+            outline.useGraphicAlpha = false;
+
+            var layout = card.AddComponent<LayoutElement>();
+            layout.preferredWidth = StatsAppTheme.TileWidth;
+            layout.preferredHeight = StatsAppTheme.TileHeight;
 
             var accentGO = new GameObject("Accent");
             accentGO.transform.SetParent(card.transform, false);
             var accentRT = accentGO.AddComponent<RectTransform>();
             accentRT.anchorMin = new Vector2(0f, 0f);
-            accentRT.anchorMax = new Vector2(0.025f, 1f);
+            accentRT.anchorMax = new Vector2(0.018f, 1f);
             accentRT.offsetMin = Vector2.zero;
             accentRT.offsetMax = Vector2.zero;
             accentGO.AddComponent<CanvasRenderer>();
@@ -317,69 +314,84 @@ namespace StatisticMod
             accentImage.color = accent;
             accentImage.raycastTarget = false;
 
+            // Mała etykieta sekcji na górze karty.
             var titleGO = new GameObject("Title");
             titleGO.transform.SetParent(card.transform, false);
             var titleRT = titleGO.AddComponent<RectTransform>();
-            titleRT.anchorMin = new Vector2(0.07f, 0.68f);
-            titleRT.anchorMax = new Vector2(0.96f, 0.95f);
+            titleRT.anchorMin = new Vector2(0.075f, 0.70f);
+            titleRT.anchorMax = new Vector2(0.95f, 0.93f);
             titleRT.offsetMin = Vector2.zero;
             titleRT.offsetMax = Vector2.zero;
             var titleTMP = titleGO.AddComponent<TextMeshProUGUI>();
             titleTMP.text = title;
-            titleTMP.fontSize = 11f;
+            titleTMP.fontSize = 9.4f;
             titleTMP.fontStyle = FontStyles.Bold;
-            titleTMP.alignment = TextAlignmentOptions.Left;
-            titleTMP.color = new Color32(255, 245, 220, 255);
+            titleTMP.alignment = TextAlignmentOptions.MidlineLeft;
+            titleTMP.color = StatsAppTheme.TileMuted;
             titleTMP.enableAutoSizing = true;
-            titleTMP.fontSizeMin = 8f;
-            titleTMP.fontSizeMax = 11f;
+            titleTMP.fontSizeMin = 7f;
+            titleTMP.fontSizeMax = 9.4f;
             titleTMP.enableWordWrapping = false;
             titleTMP.overflowMode = TextOverflowModes.Ellipsis;
             titleTMP.raycastTarget = false;
             if (_gameFont != null) titleTMP.font = _gameFont;
-            SafeSetOutline(titleTMP, 0.08f);
+            SafeSetOutline(titleTMP, 0f);
+
+            var separatorGO = new GameObject("Separator");
+            separatorGO.transform.SetParent(card.transform, false);
+            var separatorRT = separatorGO.AddComponent<RectTransform>();
+            separatorRT.anchorMin = new Vector2(0.075f, 0.68f);
+            separatorRT.anchorMax = new Vector2(0.95f, 0.68f);
+            separatorRT.sizeDelta = new Vector2(0f, 1f);
+            separatorGO.AddComponent<CanvasRenderer>();
+            var separatorImage = separatorGO.AddComponent<Image>();
+            separatorImage.color = StatsAppTheme.TileSeparator;
+            separatorImage.raycastTarget = false;
 
             var valueGO = new GameObject("Value");
             valueGO.transform.SetParent(card.transform, false);
             var valueRT = valueGO.AddComponent<RectTransform>();
-            valueRT.anchorMin = new Vector2(0.07f, 0.29f);
-            valueRT.anchorMax = new Vector2(0.96f, 0.70f);
+            valueRT.anchorMin = new Vector2(0.075f, 0.30f);
+            valueRT.anchorMax = new Vector2(0.95f, 0.67f);
             valueRT.offsetMin = Vector2.zero;
             valueRT.offsetMax = Vector2.zero;
             var valueTMP = valueGO.AddComponent<TextMeshProUGUI>();
             valueTMP.text = value;
-            valueTMP.fontSize = 20f;
+            valueTMP.fontSize = 17f;
             valueTMP.fontStyle = FontStyles.Bold;
-            valueTMP.alignment = TextAlignmentOptions.Left;
+            valueTMP.alignment = TextAlignmentOptions.MidlineLeft;
             valueTMP.color = accent;
             valueTMP.enableAutoSizing = true;
-            valueTMP.fontSizeMin = 12f;
-            valueTMP.fontSizeMax = 20f;
+            valueTMP.fontSizeMin = 11f;
+            valueTMP.fontSizeMax = 17f;
             valueTMP.enableWordWrapping = false;
             valueTMP.overflowMode = TextOverflowModes.Ellipsis;
             valueTMP.raycastTarget = false;
             if (_gameFont != null) valueTMP.font = _gameFont;
-            SafeSetOutline(valueTMP, 0.10f);
+            SafeSetOutline(valueTMP, 0f);
 
             var detailsGO = new GameObject("Details");
             detailsGO.transform.SetParent(card.transform, false);
             var detailsRT = detailsGO.AddComponent<RectTransform>();
-            detailsRT.anchorMin = new Vector2(0.07f, 0.05f);
-            detailsRT.anchorMax = new Vector2(0.96f, 0.30f);
+            detailsRT.anchorMin = new Vector2(0.075f, 0.07f);
+            detailsRT.anchorMax = new Vector2(0.95f, 0.29f);
             detailsRT.offsetMin = Vector2.zero;
             detailsRT.offsetMax = Vector2.zero;
             var detailsTMP = detailsGO.AddComponent<TextMeshProUGUI>();
             detailsTMP.text = details;
-            detailsTMP.fontSize = 8.8f;
-            detailsTMP.alignment = TextAlignmentOptions.Left;
-            detailsTMP.color = new Color32(225, 225, 225, 225);
+            detailsTMP.fontSize = 7.8f;
+            detailsTMP.alignment = TextAlignmentOptions.MidlineLeft;
+            detailsTMP.color = StatsAppTheme.TileText;
             detailsTMP.enableAutoSizing = true;
-            detailsTMP.fontSizeMin = 7f;
-            detailsTMP.fontSizeMax = 8.8f;
+            detailsTMP.fontSizeMin = 6.2f;
+            detailsTMP.fontSizeMax = 7.8f;
             detailsTMP.enableWordWrapping = false;
             detailsTMP.overflowMode = TextOverflowModes.Ellipsis;
             detailsTMP.raycastTarget = false;
             if (_gameFont != null) detailsTMP.font = _gameFont;
+
+            if (card.GetComponent<RectMask2D>() == null)
+                card.AddComponent<RectMask2D>();
 
             card.SetActive(true);
         }

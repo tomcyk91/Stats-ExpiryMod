@@ -20,22 +20,12 @@ namespace SmartExpiration.Patches
         {
             try
             {
-                ExpirationManager.SyncShelf(__instance);
-
-                var products = ExpirationSaveManager.GetSortedProducts(__instance.transform);
-                if (products != null && products.Count > 0)
+                // PERF: O(1) lookup from DisplaySlot.m_Products instead of
+                // GetComponentsInChildren + Sort for every customer purchase.
+                if (ExpirationManager.TryGetLastExpirationDay(__instance, out int expirationDay))
                 {
-                    // C2 FIX: Indeksowanie bezpośrednie bez uzywania metod rozszerzających z System.Linq
-                    var lastP = products[products.Count - 1];
-                    if (lastP != null)
-                    {
-                        var comp = lastP.GetComponent<ProductExpirationComponent>();
-                        if (comp != null)
-                        {
-                            BoxLabelPatch.EnqueueClipboardDate(comp.ExpirationDay);
-                            StatisticMod.Plugin.DebugLog($"[DisplaySlot] Enqueued date from shelf: {comp.ExpirationDay}");
-                        }
-                    }
+                    BoxLabelPatch.EnqueueClipboardDate(expirationDay);
+                    StatisticMod.Plugin.DebugLog($"[DisplaySlot] Enqueued date from shelf: {expirationDay}");
                 }
             }
             catch (Exception ex)
@@ -48,7 +38,14 @@ namespace SmartExpiration.Patches
         [HarmonyPatch(nameof(DisplaySlot.TakeProductFromDisplay))]
         private static void TakeProductFromDisplay_Postfix(DisplaySlot __instance)
         {
-            try { ExpirationManager.UpdateMemory(__instance); } catch { }
+            try
+            {
+                // PERF: normally removes one integer from memory instead of rescanning
+                // and reshuffling every product in the slot.
+                ExpirationManager.RecordProductRemoved(__instance);
+                LabelExclamationOverlay.QueueSlot(__instance);
+            }
+            catch { }
         }
 
         [HarmonyPrefix]
@@ -57,7 +54,8 @@ namespace SmartExpiration.Patches
         {
             try
             {
-                ExpirationManager.SyncShelf(__instance);
+                // No shelf-wide SyncShelf here. Existing products are already tracked;
+                // the exact newly added product is handled in the postfix.
                 var heldLabel = BoxLabelPatch.HeldBoxLabel;
 
                 if (heldLabel != null && heldLabel.BoxKey > 0)
@@ -85,20 +83,10 @@ namespace SmartExpiration.Patches
         {
             try
             {
-                var products = ExpirationSaveManager.GetSortedProducts(__instance.transform);
-                if (products != null)
-                {
-                    for (int i = 0; i < products.Count; i++)
-                    {
-                        var p = products[i];
-                        if (p != null && p.GetComponent<ProductExpirationComponent>() == null)
-                        {
-                            ExpirationManager.EnsureExpiration(p, __instance);
-                        }
-                    }
-                }
-
-                ExpirationManager.UpdateMemory(__instance);
+                // DisplaySlot appends the added item to its native m_Products list.
+                // This removes two recursive scans/sorts from every restocker/player add.
+                ExpirationManager.RecordProductAdded(__instance, ExpirationManager.GetLastProduct(__instance));
+                LabelExclamationOverlay.QueueSlot(__instance);
             }
             catch (Exception ex)
             {

@@ -68,7 +68,7 @@ namespace StatisticMod
             }
 
             ById[9999] = null;
-            NameById[9999] = Plugin.T("Lody (Stoisko)", "Ice Cream (Stand)");
+            NameById[9999] = Plugin.T("Lody", "Ice Cream");
             IconById[9999] = EmbeddedIconLoader.LoadPngSprite("icecream");
             IsBuilt = true;
         }

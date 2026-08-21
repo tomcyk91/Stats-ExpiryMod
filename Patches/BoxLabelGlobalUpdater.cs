@@ -1,38 +1,71 @@
 ﻿using System;
 using System.Collections.Generic;
-using TMPro;
+using System.Diagnostics;
 using UnityEngine;
 
 namespace SmartExpiration.Patches
 {
+    /// <summary>
+    /// One lightweight updater for box expiration state and the held-box label.
+    /// Box state is initialized under a tiny per-frame budget; visual objects are
+    /// created only for the currently held box.
+    /// </summary>
     public class BoxLabelGlobalUpdater : MonoBehaviour
     {
         public BoxLabelGlobalUpdater(IntPtr ptr) : base(ptr) { }
 
-        private float _tickTimer = 0f;
-        private int _scanCursor = 0;
+        private static readonly Queue<BoxExpirationLabel> _pendingInit = new Queue<BoxExpirationLabel>();
+        private static readonly HashSet<int> _pendingIds = new HashSet<int>();
+        private const double InitBudgetMsPerFrame = 0.15;
+        private const int MaxInitBoxesPerFrame = 2;
 
-        // PERF: zamiast petli po wszystkich kartonach co 0.2s skanujemy mala porcje.
-        // Trzymany karton jest wykrywany bezposrednio z BoxInteraction, wiec nie czeka na batch.
-        private const int LabelsPerTick = 96;
-
-        // PERF: cache transformu gracza - odswiezany rzadko, bez skanu sceny co tick.
+        private float _tickTimer;
         private static Transform _playerTf;
         private static global::BoxInteraction _playerBoxInteraction;
-        private static float _playerRefreshTimer = 0f;
+        private static float _playerRefreshTimer;
+        private BoxExpirationLabel _lastHeldLabel;
 
-        // Poza tym promieniem etykieta kartonu jest zbedna (gracz jej nie widzi/nie trzyma).
-        // Wylaczamy wtedy jej TextMeshPro -> 0 draw calls i 0 pracy CPU dla dalekich kartonow.
-        private const float CullDistance = 9f;
-        private static readonly float CullDistanceSqr = CullDistance * CullDistance;
-
-        // Udostepnione dla BoxExpirationLabel - wspoldzielony cache, bez dodatkowego skanu.
         public static Transform PlayerTransform => _playerTf;
 
-        private static Transform GetPlayer()
+        public static void QueueInitialization(BoxExpirationLabel label)
+        {
+            if (label == null) return;
+            try
+            {
+                int id = label.GetInstanceID();
+                if (_pendingIds.Add(id)) _pendingInit.Enqueue(label);
+            }
+            catch { }
+        }
+
+        private static void ProcessInitializationBudget()
+        {
+            if (!ExpirationSaveManager.SaveLoaded || _pendingInit.Count == 0) return;
+
+            long started = Stopwatch.GetTimestamp();
+            double tickToMs = 1000.0 / Stopwatch.Frequency;
+            int processed = 0;
+
+            while (_pendingInit.Count > 0 && processed < MaxInitBoxesPerFrame)
+            {
+                BoxExpirationLabel label = _pendingInit.Dequeue();
+                if (label != null)
+                {
+                    try { _pendingIds.Remove(label.GetInstanceID()); } catch { }
+                    try { label.ProcessRuntimeUpdate(); } catch { }
+                }
+
+                processed++;
+                double elapsed = (Stopwatch.GetTimestamp() - started) * tickToMs;
+                if (elapsed >= InitBudgetMsPerFrame) break;
+            }
+        }
+
+        private static void RefreshPlayerCache()
         {
             _playerRefreshTimer -= Time.deltaTime;
-            if (_playerTf != null && _playerRefreshTimer > 0f) return _playerTf;
+            if (_playerTf != null && _playerRefreshTimer > 0f) return;
+
             _playerRefreshTimer = 1.0f;
             _playerBoxInteraction = null;
 
@@ -43,19 +76,17 @@ namespace SmartExpiration.Patches
                 {
                     _playerTf = lp.transform;
                     _playerBoxInteraction = lp.GetComponent<global::BoxInteraction>();
-                    return _playerTf;
+                    return;
                 }
             }
             catch { }
 
-            // FALLBACK: kamera gracza zawsze istnieje - uzywamy jej jako pozycji odniesienia.
             try
             {
                 var cam = Camera.main;
                 if (cam != null) _playerTf = cam.transform;
             }
             catch { }
-            return _playerTf;
         }
 
         private static BoxExpirationLabel GetHeldLabel()
@@ -75,77 +106,41 @@ namespace SmartExpiration.Patches
 
         void Update()
         {
-            // Sprawdzamy etykiety 5 razy na sekunde, ale tylko w porcjach.
+            // This work is intentionally independent from the visual 4 Hz tick.
+            // It completes loaded box state quickly without creating a startup spike.
+            ProcessInitializationBudget();
+
             _tickTimer += Time.deltaTime;
-            if (_tickTimer < 0.2f) return;
+            if (_tickTimer < 0.25f) return;
             _tickTimer = 0f;
 
-            long __pf = SmartExpiration.SEProfiler.Begin();
+            long profilerStart = SmartExpiration.SEProfiler.Begin();
             try
             {
-                int total = BoxLabelPatch.AllLabels.Count;
-                if (total == 0)
-                {
-                    BoxLabelPatch.HeldBoxLabel = null;
-                    return;
-                }
+                RefreshPlayerCache();
 
-                bool showDates = (PluginConfig.ShowDatesOnBoxes != null && PluginConfig.ShowDatesOnBoxes.Value);
+                bool showDates = PluginConfig.ShowDatesOnBoxes != null &&
+                                 PluginConfig.ShowDatesOnBoxes.Value;
 
-                Transform player = GetPlayer();
-                Vector3 playerPos = player != null ? player.position : Vector3.zero;
-                bool havePlayer = player != null;
-
-                // Najwazniejsza zmiana: trzymany karton bierzemy bezposrednio z BoxInteraction,
-                // zamiast szukac go petla po wszystkich etykietach.
-                var heldLabel = GetHeldLabel();
+                BoxExpirationLabel heldLabel = GetHeldLabel();
                 BoxLabelPatch.HeldBoxLabel = heldLabel;
 
-                if (heldLabel != null && heldLabel.gameObject != null)
-                {
-                    heldLabel.SetTextEnabled(showDates);
-                    heldLabel.ProcessRuntimeUpdate();
-                    if (showDates) heldLabel.ProcessLogicUpdate();
-                }
+                if (_lastHeldLabel != null && _lastHeldLabel != heldLabel)
+                    _lastHeldLabel.SetTextEnabled(false);
 
-                if (_scanCursor >= total) _scanCursor = 0;
+                _lastHeldLabel = heldLabel;
+                if (heldLabel == null) return;
 
-                int processed = 0;
-                int examined = 0;
-                int idx = _scanCursor;
-
-                while (examined < total && processed < LabelsPerTick)
-                {
-                    if (idx >= BoxLabelPatch.AllLabels.Count) idx = 0;
-                    if (BoxLabelPatch.AllLabels.Count == 0) break;
-
-                    var label = BoxLabelPatch.AllLabels[idx];
-                    idx++;
-                    examined++;
-                    processed++;
-
-                    if (label == null || label.gameObject == null) continue;
-                    if (heldLabel != null && label == heldLabel) continue;
-
-                    if (havePlayer)
-                    {
-                        Vector3 d = label.transform.position - playerPos;
-                        if (d.sqrMagnitude > CullDistanceSqr)
-                        {
-                            label.SetTextEnabled(false);
-                            continue;
-                        }
-                    }
-
-                    // Daty pokazujemy tylko na trzymanym kartonie. Dla pobliskich kartonow
-                    // lekko podtrzymujemy runtime state w batchu, bez pelnego skanu wszystkich.
-                    label.SetTextEnabled(false);
-                    label.ProcessRuntimeUpdate();
-                }
-
-                _scanCursor = idx;
+                // Held box gets priority even if its background initialization has not
+                // reached it yet.
+                heldLabel.ProcessRuntimeUpdate();
+                heldLabel.SetTextEnabled(showDates);
+                if (showDates) heldLabel.ProcessLogicUpdate();
             }
-            finally { SmartExpiration.SEProfiler.End("BoxLabels", __pf); }
+            finally
+            {
+                SmartExpiration.SEProfiler.End("BoxLabels_HeldOnly", profilerStart);
+            }
         }
     }
 }

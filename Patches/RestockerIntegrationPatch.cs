@@ -19,7 +19,7 @@ namespace SmartExpiration.Patches
         private static DisplaySlot[] _cachedSlots = new DisplaySlot[0];
         private static Dictionary<int, int> _slotChildCounts = new Dictionary<int, int>();
         private static int _batchCursor = 0;
-        private const int BatchSize = 8;
+        private const int BatchSize = 16;
 
         public static void Process()
         {
@@ -29,6 +29,8 @@ namespace SmartExpiration.Patches
             long __pf = SmartExpiration.SEProfiler.Begin();
             try
             {
+                // SceneSlotCache no longer performs TTL rescans. Reading it here is O(1)
+                // and the safety scanner itself examines only a fixed number of slots.
                 _cachedSlots = SmartExpiration.SceneSlotCache.GetSlots();
 
                 int total = _cachedSlots != null ? _cachedSlots.Length : 0;
@@ -36,52 +38,38 @@ namespace SmartExpiration.Patches
                 if (_batchCursor >= total) _batchCursor = 0;
 
                 int examined = 0;
-                int processed = 0;
                 int idx = _batchCursor;
 
-                while (examined < total && processed < BatchSize)
+                // BUGFIX PERF: the old condition counted only CHANGED slots. When no shelf
+                // changed it walked the entire store every 1.5 s. We now inspect at most
+                // BatchSize slots per tick, regardless of whether they changed.
+                while (examined < total && examined < BatchSize)
                 {
                     var slot = _cachedSlots[idx];
                     idx++; if (idx >= total) idx = 0;
                     examined++;
 
-                    if (slot == null || !slot.HasProduct) continue;
+                    if (slot == null) continue;
 
                     int instanceId = slot.GetInstanceID();
-                    int currentChildren = slot.transform.childCount;
+                    int currentProducts = ExpirationManager.GetProductCount(slot);
 
-                    // Optymalizacja C#: TryGetValue omija podwójne odpytywanie słownika
-                    if (_slotChildCounts.TryGetValue(instanceId, out int prevCount) && prevCount == currentChildren)
+                    if (_slotChildCounts.TryGetValue(instanceId, out int prevCount) && prevCount == currentProducts)
+                        continue;
+
+                    // Remember empty state too, so a later refill with the same count is still
+                    // detected correctly after the slot passed through zero products.
+                    _slotChildCounts[instanceId] = currentProducts;
+                    if (currentProducts <= 0 || !slot.HasProduct)
                     {
+                        LabelExclamationOverlay.QueueSlot(slot);
                         continue;
                     }
 
-                    _slotChildCounts[instanceId] = currentChildren;
-                    processed++;
-
+                    // SyncShelf now iterates DisplaySlot.m_Products directly, without a
+                    // hierarchy scan/sort. It also already creates every missing component.
                     ExpirationManager.SyncShelf(slot);
-
-                    // PERF IL2CPP FIX: Skan po indeksie zamiast alokowania pętli foreach
-                    var products = slot.GetComponentsInChildren<global::Product>(true);
-                    bool shelfChanged = false;
-
-                    if (products != null)
-                    {
-                        for (int i = 0; i < products.Count; i++)
-                        {
-                            var p = products[i];
-                            if (p != null && p.GetComponent<ProductExpirationComponent>() == null)
-                            {
-                                ExpirationManager.EnsureExpiration(p, slot);
-                                shelfChanged = true;
-                            }
-                        }
-                    }
-
-                    if (shelfChanged)
-                    {
-                        ExpirationManager.UpdateMemory(slot);
-                    }
+                    LabelExclamationOverlay.QueueSlot(slot);
                 }
                 _batchCursor = idx;
             }

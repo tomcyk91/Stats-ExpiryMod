@@ -19,6 +19,8 @@ namespace SmartExpiration.Patches
             try
             {
                 StatisticMod.StatsStore.SaveNow();
+                StatisticMod.BusinessAnalysisStore.SaveNow();
+                StatisticMod.DailySummaryStore.SaveNow();
                 StatisticMod.Plugin.DebugLog("[GameSavePatches] Zapisano statystyki (SaveInfo).");
 
                 StatisticMod.Plugin.DebugLog("[GameSavePatches] Save(SaveInfo) -> ExpirationSaveManager.SaveData()");
@@ -45,6 +47,8 @@ namespace SmartExpiration.Patches
             try
             {
                 StatisticMod.StatsStore.SaveNow();
+                StatisticMod.BusinessAnalysisStore.SaveNow();
+                StatisticMod.DailySummaryStore.SaveNow();
                 StatisticMod.Plugin.DebugLog("[GameSavePatches] Zapisano statystyki (String).");
 
                 StatisticMod.Plugin.DebugLog("[GameSavePatches] Save(string) -> ExpirationSaveManager.SaveData()");
@@ -71,6 +75,8 @@ namespace SmartExpiration.Patches
             try
             {
                 StatisticMod.StatsStore.SaveNow();
+                StatisticMod.BusinessAnalysisStore.SaveNow();
+                StatisticMod.DailySummaryStore.SaveNow();
                 StatisticMod.Plugin.DebugLog("[GameSavePatches] Zapisano statystyki (NoArgs).");
 
                 StatisticMod.Plugin.DebugLog("[GameSavePatches] Save() -> ExpirationSaveManager.SaveData()");
@@ -99,6 +105,8 @@ namespace SmartExpiration.Patches
             try
             {
                 StatisticMod.StatsStore.SaveNow();
+                StatisticMod.BusinessAnalysisStore.SaveNow();
+                StatisticMod.DailySummaryStore.SaveNow();
                 StatisticMod.Plugin.DebugLog("[GameSavePatches] Zapisano statystyki (QuickSave / F5).");
                 ExpirationSaveManager.SaveData();
             }
@@ -135,6 +143,7 @@ namespace SmartExpiration.Patches
                 }
                 catch (Exception exSlot) { StatisticMod.Plugin.Log.LogWarning("[GameSavePatches] Redetect slot blad: " + exSlot.Message); }
 
+                SmartExpiration.ExpirationLoadFinalizer.BeginNewLoad();
                 ExpirationSaveManager.LoadData();
 
                 try

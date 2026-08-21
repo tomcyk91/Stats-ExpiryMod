@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Collections;
+using System.Diagnostics;
 using UnityEngine;
 
 namespace SmartExpiration
@@ -7,16 +8,23 @@ namespace SmartExpiration
     public class ExpirationLoadFinalizer : MonoBehaviour
     {
         private const float MaxWaitSeconds = 10f;
-        private const float InitialSceneDelay = 0.75f;
-        private const float EmptySceneRetryDelay = 0.5f;
-        private const int MaxEmptySceneRetries = 3;
+        private const float InitialSceneDelay = 0.50f;
+        private const float EmptySceneRetryDelay = 0.50f;
+        private const int MaxEmptySceneRetries = 6;
+        private const double MaxSyncBudgetMsPerFrame = 0.30;
 
         private static bool _syncInProgress;
+        public static bool InitialSyncComplete { get; private set; }
+        public static bool SyncInProgress => _syncInProgress;
+
+        public static void BeginNewLoad()
+        {
+            InitialSyncComplete = false;
+            SceneSlotCache.InvalidateSlots();
+        }
 
         public static IEnumerator DelayedSyncCoroutine()
         {
-            // ApplySaveData może zostać wywołane więcej niż raz podczas jednego ładowania.
-            // Nie uruchamiamy równolegle kilku pełnych synchronizacji półek.
             if (_syncInProgress)
             {
                 StatisticMod.Plugin.DebugLog("[DelayedSync] Synchronization already running - duplicate request skipped.");
@@ -24,11 +32,11 @@ namespace SmartExpiration
             }
 
             _syncInProgress = true;
+            InitialSyncComplete = false;
 
             try
             {
                 float waitStartedAt = Time.realtimeSinceStartup;
-
                 while (!ExpirationSaveManager.SaveLoaded &&
                        Time.realtimeSinceStartup - waitStartedAt < MaxWaitSeconds)
                 {
@@ -37,103 +45,89 @@ namespace SmartExpiration
 
                 if (!ExpirationSaveManager.SaveLoaded)
                 {
-                    StatisticMod.Plugin.DebugWarning(
-                        "[DelayedSync] Save data was not loaded before timeout. Shelf synchronization skipped.");
+                    StatisticMod.Plugin.DebugWarning("[DelayedSync] Save data timeout; startup sync skipped.");
                     yield break;
                 }
 
-                StatisticMod.Plugin.DebugLog("[DelayedSync] SaveLoaded detected.");
-
-                // Czekamy w czasie rzeczywistym, aby pauza lub zerowy timeScale nie blokowały inicjalizacji.
                 yield return new WaitForSecondsRealtime(InitialSceneDelay);
 
-                var allSlots = UnityEngine.Object.FindObjectsOfType<DisplaySlot>();
+                DisplaySlot[] allSlots = GetCurrentSlots(true);
                 int retry = 0;
-                bool hasAnySlot = HasAnySlot(allSlots);
-
-                // Zamiast skanowania sceny co 0,1 s wykonujemy najwyżej kilka kontrolowanych prób.
-                while (!hasAnySlot && retry < MaxEmptySceneRetries)
+                while ((allSlots == null || allSlots.Length == 0) && retry < MaxEmptySceneRetries)
                 {
                     retry++;
                     yield return new WaitForSecondsRealtime(EmptySceneRetryDelay);
-                    allSlots = UnityEngine.Object.FindObjectsOfType<DisplaySlot>();
-                    hasAnySlot = HasAnySlot(allSlots);
+                    allSlots = GetCurrentSlots(true);
                 }
 
-                if (!hasAnySlot)
-                {
-                    StatisticMod.Plugin.DebugWarning(
-                        "[DelayedSync] No DisplaySlot objects found. Shelf synchronization skipped.");
-                    yield break;
-                }
+                if (allSlots == null) allSlots = new DisplaySlot[0];
 
-                int slotsPerFrame = 4;
+                int slotsPerFrame = 2;
                 try
                 {
                     if (PluginConfig.LoadSyncSlotsPerFrame != null)
-                        slotsPerFrame = Mathf.Clamp(PluginConfig.LoadSyncSlotsPerFrame.Value, 1, 32);
+                        slotsPerFrame = Mathf.Clamp(PluginConfig.LoadSyncSlotsPerFrame.Value, 1, 8);
                 }
-                catch
-                {
-                    slotsPerFrame = 4;
-                }
+                catch { slotsPerFrame = 2; }
 
-                float syncStartedAt = Time.realtimeSinceStartup;
                 int scanned = 0;
                 int occupied = 0;
                 int errors = 0;
                 int processedThisFrame = 0;
+                long frameStart = Stopwatch.GetTimestamp();
+                double tickToMs = 1000.0 / Stopwatch.Frequency;
 
                 for (int i = 0; i < allSlots.Length; i++)
                 {
                     DisplaySlot slot = allSlots[i];
                     scanned++;
+                    if (slot == null) continue;
+
+                    bool hasProduct = false;
+                    try { hasProduct = slot.HasProduct; } catch { }
+                    if (!hasProduct) continue; // empty shelves need no expiration initialization
 
                     try
                     {
-                        if (slot != null)
-                        {
-                            ExpirationManager.SyncShelf(slot);
-                            if (slot.HasProduct) occupied++;
-                        }
+                        ExpirationManager.SyncShelf(slot);
+                        occupied++;
+                        LabelExclamationOverlay.QueueSlot(slot);
                     }
                     catch (Exception ex)
                     {
                         errors++;
-                        // Szczegółowy wyjątek jest przydatny, ale występuje tylko w razie realnego błędu.
-                        StatisticMod.Plugin.DebugWarning(
-                            $"[DelayedSync] SyncShelf error: {ex.Message}");
+                        StatisticMod.Plugin.DebugWarning($"[DelayedSync] SyncShelf error: {ex.Message}");
                     }
 
                     processedThisFrame++;
-                    if (processedThisFrame >= slotsPerFrame)
+                    double elapsedMs = (Stopwatch.GetTimestamp() - frameStart) * tickToMs;
+                    if (processedThisFrame >= slotsPerFrame || elapsedMs >= MaxSyncBudgetMsPerFrame)
                     {
                         processedThisFrame = 0;
                         yield return null;
+                        frameStart = Stopwatch.GetTimestamp();
                     }
                 }
 
-                float elapsedMs = (Time.realtimeSinceStartup - syncStartedAt) * 1000f;
+                // Reuse exactly this native-cache snapshot for marker initialization.
+                // No second scene search after startup synchronization.
+                InitialSyncComplete = true;
                 StatisticMod.Plugin.DebugLog(
-                    $"[DelayedSync] DONE. scanned={scanned}, occupied={occupied}, " +
-                    $"errors={errors}, batch={slotsPerFrame}, elapsed={elapsedMs:F1} ms");
+                    $"[DelayedSync] DONE. scanned={scanned}, occupied={occupied}, errors={errors}, " +
+                    $"batch={slotsPerFrame}, budget={MaxSyncBudgetMsPerFrame:F2}ms");
             }
             finally
             {
                 _syncInProgress = false;
+                if (ExpirationSaveManager.SaveLoaded)
+                    InitialSyncComplete = true; // fail-soft: never block event-driven runtime forever
             }
         }
 
-        private static bool HasAnySlot(Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppArrayBase<DisplaySlot> slots)
+        private static DisplaySlot[] GetCurrentSlots(bool invalidate)
         {
-            if (slots == null) return false;
-
-            for (int i = 0; i < slots.Length; i++)
-            {
-                if (slots[i] != null) return true;
-            }
-
-            return false;
+            if (invalidate) SceneSlotCache.InvalidateSlots();
+            return SceneSlotCache.GetSlots();
         }
     }
 }

@@ -1,4 +1,4 @@
-using Il2CppInterop.Runtime.Attributes;
+﻿using Il2CppInterop.Runtime.Attributes;
 using Il2CppInterop.Runtime.Injection;
 using PG;
 using System;
@@ -151,6 +151,11 @@ namespace StatisticMod
 
         public void TryInstall()
         {
+            // PERF: StatsRunner calls this every 5 seconds. Once the app is installed,
+            // do not scan the whole scene for ComputerOperatingSystem again.
+            if (_installedForThisComputer && _computerRoot != null && _statsApp != null && _statsShortcutButton != null)
+                return;
+
             var os = UnityEngine.Object.FindObjectOfType<ComputerOperatingSystem>(true);
             if (os == null) return;
 
@@ -325,17 +330,13 @@ namespace StatisticMod
             string thrownValTxt = useKg ? $"{thrownVal:0.000}" : $"{Mathf.RoundToInt(thrownVal)}";
 
             string newText =
-                $"{Plugin.T("• Sprzedane: ", "• Sold: ")}<color=#00BFFF>{soldValTxt} {unitSuffix}</color>\n" +
-                $"{Plugin.T("• Przychód: ", "• Revenue: ")}<color=#90EE90>{revenue:0.00} $</color>\n" +
-                $"{Plugin.T("• Wyrzucone: ", "• Wasted: ")}<color=#FF8C00>{thrownValTxt} {unitSuffix}</color>\n" +
-                $"{Plugin.T("• Strata: ", "• Loss: ")}<color=#FF4500>{loss:0.00} $</color>";
+                $"{Plugin.T("Sprzedane", "Sold")}: <color={StatsAppTheme.InfoHex}><b>{soldValTxt} {unitSuffix}</b></color>\n" +
+                $"{Plugin.T("Przychód", "Revenue")}: <color={StatsAppTheme.PositiveHex}><b>{revenue:0.00} $</b></color>\n" +
+                $"{Plugin.T("Wyrzucone", "Wasted")}: <color={StatsAppTheme.WarningHex}><b>{thrownValTxt} {unitSuffix}</b></color>\n" +
+                $"{Plugin.T("Strata", "Loss")}: <color={StatsAppTheme.NegativeHex}><b>{loss:0.00} $</b></color>";
 
-            // ⚡ ATOMOWA OPTYMALIZACJA UI: 
-            // Podmieniamy i wymuszamy rendering Canvasa TYLKO, gdy tekst/wartość fizycznie się zmieniły.
             if (tmp.text != newText)
-            {
                 tmp.text = newText;
-            }
         }
 
         private float GetCurrentCost(int productId)
@@ -409,13 +410,118 @@ namespace StatisticMod
 
             go.AddComponent<CanvasRenderer>();
             var img = go.AddComponent<Image>();
-            img.color = new Color(0.820f, 0.914f, 0.945f, 1f);
+            img.color = StatsAppTheme.AppFrame;
             img.raycastTarget = true;
 
+            BuildAppBodySurface(go.transform);
             BuildHeaderWithClose(go.transform);
 
             go.transform.SetAsLastSibling();
             return go;
+        }
+
+        private void BuildAppBodySurface(Transform appRoot)
+        {
+            if (appRoot == null) return;
+
+            var body = new GameObject("BodyPanel");
+            body.transform.SetParent(appRoot, false);
+            body.transform.SetAsFirstSibling();
+
+            var rt = body.AddComponent<RectTransform>();
+            rt.anchorMin = new Vector2(StatsAppTheme.OuterLeft, StatsAppTheme.BodyBottom);
+            rt.anchorMax = new Vector2(StatsAppTheme.OuterRight, StatsAppTheme.BodyTop);
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
+
+            body.AddComponent<CanvasRenderer>();
+            var image = body.AddComponent<Image>();
+            image.color = StatsAppTheme.Body;
+            image.raycastTarget = false;
+
+            var outline = body.AddComponent<Outline>();
+            outline.effectColor = StatsAppTheme.Border;
+            outline.effectDistance = new Vector2(1f, -1f);
+
+            var accent = new GameObject("BodyAccent");
+            accent.transform.SetParent(body.transform, false);
+
+            var accentRT = accent.AddComponent<RectTransform>();
+            accentRT.anchorMin = new Vector2(0f, 1f);
+            accentRT.anchorMax = new Vector2(1f, 1f);
+            accentRT.pivot = new Vector2(0.5f, 1f);
+            accentRT.sizeDelta = new Vector2(0f, 3f);
+            accentRT.anchoredPosition = Vector2.zero;
+
+            accent.AddComponent<CanvasRenderer>();
+            var accentImage = accent.AddComponent<Image>();
+            accentImage.color = StatsAppTheme.Accent;
+            accentImage.raycastTarget = false;
+        }
+
+        private void BuildHeaderBranding(Transform headerRoot)
+        {
+            if (headerRoot == null) return;
+
+            var brandGO = new GameObject("Brand");
+            brandGO.transform.SetParent(headerRoot, false);
+
+            var brandRT = brandGO.AddComponent<RectTransform>();
+            brandRT.anchorMin = new Vector2(0.02f, 0.52f);
+            brandRT.anchorMax = new Vector2(0.56f, 0.94f);
+            brandRT.offsetMin = Vector2.zero;
+            brandRT.offsetMax = Vector2.zero;
+
+            var brand = brandGO.AddComponent<TextMeshProUGUI>();
+            brand.text = "STATS & EXPIRY";
+            brand.alignment = TextAlignmentOptions.MidlineLeft;
+            brand.fontStyle = FontStyles.Bold;
+            brand.fontSize = 18f;
+            brand.enableAutoSizing = true;
+            brand.fontSizeMin = 11f;
+            brand.fontSizeMax = 18f;
+            brand.enableWordWrapping = false;
+            brand.overflowMode = TextOverflowModes.Ellipsis;
+            brand.color = StatsAppTheme.TextLight;
+            brand.raycastTarget = false;
+            if (_gameFont != null) brand.font = _gameFont;
+
+            var subtitleGO = new GameObject("BrandSubtitle");
+            subtitleGO.transform.SetParent(headerRoot, false);
+
+            var subtitleRT = subtitleGO.AddComponent<RectTransform>();
+            subtitleRT.anchorMin = new Vector2(0.57f, 0.56f);
+            subtitleRT.anchorMax = new Vector2(0.90f, 0.90f);
+            subtitleRT.offsetMin = Vector2.zero;
+            subtitleRT.offsetMax = Vector2.zero;
+
+            var subtitle = subtitleGO.AddComponent<TextMeshProUGUI>();
+            subtitle.text = Plugin.T("ZARZĄDZANIE SKLEPEM I DANYMI", "STORE DATA & MANAGEMENT");
+            subtitle.alignment = TextAlignmentOptions.MidlineRight;
+            subtitle.fontStyle = FontStyles.Normal;
+            subtitle.fontSize = 9.5f;
+            subtitle.enableAutoSizing = true;
+            subtitle.fontSizeMin = 7f;
+            subtitle.fontSizeMax = 9.5f;
+            subtitle.enableWordWrapping = false;
+            subtitle.overflowMode = TextOverflowModes.Ellipsis;
+            subtitle.color = new Color(StatsAppTheme.TextLight.r, StatsAppTheme.TextLight.g, StatsAppTheme.TextLight.b, 0.62f);
+            subtitle.raycastTarget = false;
+            if (_gameFont != null) subtitle.font = _gameFont;
+
+            var dividerGO = new GameObject("HeaderDivider");
+            dividerGO.transform.SetParent(headerRoot, false);
+
+            var dividerRT = dividerGO.AddComponent<RectTransform>();
+            dividerRT.anchorMin = new Vector2(0.02f, 0.48f);
+            dividerRT.anchorMax = new Vector2(0.985f, 0.48f);
+            dividerRT.sizeDelta = new Vector2(0f, 1f);
+            dividerRT.anchoredPosition = Vector2.zero;
+
+            dividerGO.AddComponent<CanvasRenderer>();
+            var divider = dividerGO.AddComponent<Image>();
+            divider.color = new Color(StatsAppTheme.HeaderBorder.r, StatsAppTheme.HeaderBorder.g, StatsAppTheme.HeaderBorder.b, 0.55f);
+            divider.raycastTarget = false;
         }
 
         private void BuildHeaderWithClose(Transform appRoot)
@@ -424,16 +530,22 @@ namespace StatisticMod
             header.transform.SetParent(appRoot, false);
 
             var hrt = header.AddComponent<RectTransform>();
-            hrt.anchorMin = new Vector2(0f, 0.92f);
-            hrt.anchorMax = new Vector2(1f, 0.98f);
+            hrt.anchorMin = new Vector2(StatsAppTheme.OuterLeft, StatsAppTheme.HeaderBottom);
+            hrt.anchorMax = new Vector2(StatsAppTheme.OuterRight, StatsAppTheme.HeaderTop);
             hrt.offsetMin = Vector2.zero;
             hrt.offsetMax = Vector2.zero;
 
             header.AddComponent<CanvasRenderer>();
             var himg = header.AddComponent<Image>();
-            himg.color = new Color(0f, 0.667f, 0.969f, 1f);
+            himg.color = StatsAppTheme.Header;
+            himg.raycastTarget = true;
+
+            var headerOutline = header.AddComponent<Outline>();
+            headerOutline.effectColor = StatsAppTheme.HeaderBorder;
+            headerOutline.effectDistance = new Vector2(1f, -1f);
 
             CacheGameTmpStyle();
+            BuildHeaderBranding(header.transform);
 
             // =========================
             // TITLE BUTTON (mode switch)
@@ -441,14 +553,14 @@ namespace StatisticMod
             var titleBtnGO = new GameObject("TitleButton");
             titleBtnGO.transform.SetParent(header.transform, false);
             var tbrt = titleBtnGO.AddComponent<RectTransform>();
-            tbrt.anchorMin = new Vector2(0.02f, 0.15f);
-            tbrt.anchorMax = new Vector2(0.20f, 0.85f);
+            tbrt.anchorMin = new Vector2(0.02f, 0.08f);
+            tbrt.anchorMax = new Vector2(0.20f, 0.43f);
             tbrt.offsetMin = Vector2.zero;
             tbrt.offsetMax = Vector2.zero;
 
             titleBtnGO.AddComponent<CanvasRenderer>();
             var tbImg = titleBtnGO.AddComponent<Image>();
-            tbImg.color = new Color(1f, 1f, 1f, 0.12f);
+            tbImg.color = StatsAppTheme.Button;
             tbImg.raycastTarget = true;
 
             _titleModeBtn = titleBtnGO.AddComponent<Button>();
@@ -468,7 +580,7 @@ namespace StatisticMod
             _titleTmp.fontSize = 13;
             _titleTmp.fontStyle = FontStyles.Bold;
             if (_gameFont != null) _titleTmp.font = _gameFont;
-            _titleTmp.color = new Color32(255, 245, 220, 255);
+            _titleTmp.color = StatsAppTheme.TextLight;
             _titleTmp.enableAutoSizing = true;
             _titleTmp.fontSizeMin = 8f;
             _titleTmp.fontSizeMax = 13f;
@@ -485,14 +597,14 @@ namespace StatisticMod
 
             var fbrt = filterBtnGO.AddComponent<RectTransform>();
             // Pozycjonujemy między 0.24 a 0.33 (tytuł kończy się na 0.22)
-            fbrt.anchorMin = new Vector2(0.22f, 0.15f);
-            fbrt.anchorMax = new Vector2(0.32f, 0.85f);
+            fbrt.anchorMin = new Vector2(0.215f, 0.08f);
+            fbrt.anchorMax = new Vector2(0.325f, 0.43f);
             fbrt.offsetMin = Vector2.zero;
             fbrt.offsetMax = Vector2.zero;
 
             filterBtnGO.AddComponent<CanvasRenderer>();
             var fbImg = filterBtnGO.AddComponent<Image>();
-            fbImg.color = new Color(1f, 1f, 1f, 0.12f);
+            fbImg.color = StatsAppTheme.Button;
             fbImg.raycastTarget = true;
 
             _filterAvailableBtn = filterBtnGO.AddComponent<Button>();
@@ -512,7 +624,7 @@ namespace StatisticMod
             _filterAvailableLabel.fontSize = 10; // Mała czcionka by weszło
             _filterAvailableLabel.fontStyle = FontStyles.Bold;
             if (_gameFont != null) _filterAvailableLabel.font = _gameFont;
-            _filterAvailableLabel.color = new Color32(255, 245, 220, 255);
+            _filterAvailableLabel.color = StatsAppTheme.TextLight;
             SafeSetOutline(_filterAvailableLabel, 0.15f);
             _filterAvailableLabel.enableAutoSizing = true;
             _filterAvailableLabel.fontSizeMin = 7f;
@@ -530,14 +642,14 @@ namespace StatisticMod
 
             var smrt = sortModeGO.AddComponent<RectTransform>();
             // SORT MODE
-            smrt.anchorMin = new Vector2(0.68f, 0.15f);
-            smrt.anchorMax = new Vector2(0.87f, 0.85f);
+            smrt.anchorMin = new Vector2(0.665f, 0.08f);
+            smrt.anchorMax = new Vector2(0.875f, 0.43f);
             smrt.offsetMin = Vector2.zero;
             smrt.offsetMax = Vector2.zero;
 
             sortModeGO.AddComponent<CanvasRenderer>();
             var smImg = sortModeGO.AddComponent<Image>();
-            smImg.color = new Color(1f, 1f, 1f, 0.12f);
+            smImg.color = StatsAppTheme.Button;
             smImg.raycastTarget = true;
 
             _sortModeBtn = sortModeGO.AddComponent<Button>();
@@ -559,7 +671,7 @@ namespace StatisticMod
             _sortLabelTmp.fontSize = 13f;
             _sortLabelTmp.fontStyle = FontStyles.Bold;
             if (_gameFont != null) _sortLabelTmp.font = _gameFont;
-            _sortLabelTmp.color = new Color32(255, 245, 220, 255);
+            _sortLabelTmp.color = StatsAppTheme.TextLight;
             _sortLabelTmp.enableAutoSizing = true;
             _sortLabelTmp.fontSizeMin = 6f;
             _sortLabelTmp.fontSizeMax = 13f;
@@ -578,14 +690,14 @@ namespace StatisticMod
 
             var sdrt = sortDirGO.AddComponent<RectTransform>();
             // SORT DIR (↑ / ↓)
-            sdrt.anchorMin = new Vector2(0.89f, 0.15f);
-            sdrt.anchorMax = new Vector2(0.93f, 0.85f);
+            sdrt.anchorMin = new Vector2(0.885f, 0.08f);
+            sdrt.anchorMax = new Vector2(0.925f, 0.43f);
             sdrt.offsetMin = Vector2.zero;
             sdrt.offsetMax = Vector2.zero;
 
             sortDirGO.AddComponent<CanvasRenderer>();
             var sdImg = sortDirGO.AddComponent<Image>();
-            sdImg.color = new Color(1f, 1f, 1f, 0.12f);
+            sdImg.color = StatsAppTheme.Button;
             sdImg.raycastTarget = true;
 
             _sortDirBtn = sortDirGO.AddComponent<Button>();
@@ -607,7 +719,7 @@ namespace StatisticMod
             _sortDirTmp.fontSize = 15;
             _sortDirTmp.fontStyle = FontStyles.Bold;
             if (_gameFont != null) _sortDirTmp.font = _gameFont;
-            _sortDirTmp.color = new Color32(255, 245, 220, 255);
+            _sortDirTmp.color = StatsAppTheme.TextLight;
             SafeSetOutline(_sortDirTmp, 0.25f);
             _sortDirTmp.outlineColor = new Color32(0, 0, 0, 180);
 
@@ -618,14 +730,18 @@ namespace StatisticMod
             _searchBarGO.transform.SetParent(header.transform, false);
 
             var sbrt = _searchBarGO.AddComponent<RectTransform>();
-            sbrt.anchorMin = new Vector2(0.35f, 0.15f);
-            sbrt.anchorMax = new Vector2(0.65f, 0.85f);
+            sbrt.anchorMin = new Vector2(0.34f, 0.08f);
+            sbrt.anchorMax = new Vector2(0.65f, 0.43f);
             sbrt.offsetMin = Vector2.zero;
             sbrt.offsetMax = Vector2.zero;
 
             _searchBarGO.AddComponent<CanvasRenderer>();
             var sbImg = _searchBarGO.AddComponent<Image>();
-            sbImg.color = new Color(0f, 0f, 0f, 0.2f); // Ciemniejsze tło dla kontrastu
+            sbImg.color = StatsAppTheme.InputBackground;
+
+            var searchOutline = _searchBarGO.AddComponent<Outline>();
+            searchOutline.effectColor = StatsAppTheme.Border;
+            searchOutline.effectDistance = new Vector2(1f, -1f);
 
             _searchInputField = _searchBarGO.AddComponent<TMPro.TMP_InputField>();
 
@@ -643,7 +759,7 @@ namespace StatisticMod
             textGO.transform.SetParent(textArea.transform, false);
             var txt = textGO.AddComponent<TextMeshProUGUI>();
             txt.fontSize = 12;
-            txt.color = Color.white;
+            txt.color = StatsAppTheme.TextDark;
             txt.alignment = TextAlignmentOptions.Left;
             txt.verticalAlignment = VerticalAlignmentOptions.Middle;
             if (_gameFont != null) txt.font = _gameFont;
@@ -655,7 +771,7 @@ namespace StatisticMod
             phTxt.text = Plugin.T("Szukaj nazwy lub ID...", "Search by name or ID");
             phTxt.fontSize = 12;
             phTxt.fontStyle = FontStyles.Italic;
-            phTxt.color = new Color(1f, 1f, 1f, 0.3f);
+            phTxt.color = StatsAppTheme.TextMuted;
             phTxt.alignment = TextAlignmentOptions.Left;
             phTxt.verticalAlignment = VerticalAlignmentOptions.Middle;
             if (_gameFont != null) phTxt.font = _gameFont;
@@ -673,10 +789,19 @@ namespace StatisticMod
             _daySelectorGO.transform.SetParent(header.transform, false);
 
             var drt = _daySelectorGO.AddComponent<RectTransform>();
-            drt.anchorMin = new Vector2(0.35f, 0f);
-            drt.anchorMax = new Vector2(0.65f, 1f);
+            drt.anchorMin = new Vector2(0.34f, 0.08f);
+            drt.anchorMax = new Vector2(0.65f, 0.43f);
             drt.offsetMin = Vector2.zero;
             drt.offsetMax = Vector2.zero;
+
+            _daySelectorGO.AddComponent<CanvasRenderer>();
+            var daySelectorBg = _daySelectorGO.AddComponent<Image>();
+            daySelectorBg.color = StatsAppTheme.Button;
+            daySelectorBg.raycastTarget = false;
+
+            var daySelectorOutline = _daySelectorGO.AddComponent<Outline>();
+            daySelectorOutline.effectColor = StatsAppTheme.HeaderBorder;
+            daySelectorOutline.effectDistance = new Vector2(1f, -1f);
 
             // PREV
             var prevGO = new GameObject("Prev");
@@ -689,7 +814,7 @@ namespace StatisticMod
             prt.offsetMax = Vector2.zero;
 
             prevGO.AddComponent<CanvasRenderer>();
-            prevGO.AddComponent<Image>().color = new Color(1f, 1f, 1f, 0.12f);
+            prevGO.AddComponent<Image>().color = StatsAppTheme.Button;
             _prevDayBtn = prevGO.AddComponent<Button>();
             _prevDayBtn.onClick.AddListener((UnityAction)OnPrevDayClicked);
 
@@ -708,7 +833,7 @@ namespace StatisticMod
             prevTmp.alignment = TextAlignmentOptions.Center;
             prevTmp.fontSize = 18;
             if (_gameFont != null) prevTmp.font = _gameFont;
-            prevTmp.color = new Color32(255, 245, 220, 255);
+            prevTmp.color = StatsAppTheme.TextLight;
             SafeSetOutline(prevTmp, 0.15f);
             prevTmp.outlineColor = new Color32(0, 0, 0, 180);
 
@@ -729,7 +854,7 @@ namespace StatisticMod
             _dayLabelTmp.fontSize = 15;
             _dayLabelTmp.fontStyle = FontStyles.Bold;
             if (_gameFont != null) _dayLabelTmp.font = _gameFont;
-            _dayLabelTmp.color = new Color32(255, 245, 220, 255);
+            _dayLabelTmp.color = StatsAppTheme.TextLight;
             SafeSetOutline(_dayLabelTmp, 0.15f);
             _dayLabelTmp.outlineColor = new Color32(0, 0, 0, 180);
 
@@ -744,7 +869,7 @@ namespace StatisticMod
             nrt.offsetMax = Vector2.zero;
 
             nextGO.AddComponent<CanvasRenderer>();
-            nextGO.AddComponent<Image>().color = new Color(1f, 1f, 1f, 0.12f);
+            nextGO.AddComponent<Image>().color = StatsAppTheme.Button;
             _nextDayBtn = nextGO.AddComponent<Button>();
             _nextDayBtn.onClick.AddListener((UnityAction)OnNextDayClicked);
 
@@ -763,7 +888,7 @@ namespace StatisticMod
             nextTmp.alignment = TextAlignmentOptions.Center;
             nextTmp.fontSize = 18;
             if (_gameFont != null) nextTmp.font = _gameFont;
-            nextTmp.color = new Color32(255, 245, 220, 255);
+            nextTmp.color = StatsAppTheme.TextLight;
             SafeSetOutline(nextTmp, 0.15f);
             nextTmp.outlineColor = new Color32(0, 0, 0, 180);
 
@@ -774,13 +899,13 @@ namespace StatisticMod
             closeGO.transform.SetParent(header.transform, false);
 
             var crt = closeGO.AddComponent<RectTransform>();
-            crt.anchorMin = new Vector2(0.95f, 0.15f);
-            crt.anchorMax = new Vector2(0.98f, 0.85f);
+            crt.anchorMin = new Vector2(0.945f, 0.56f);
+            crt.anchorMax = new Vector2(0.985f, 0.90f);
             crt.offsetMin = Vector2.zero;
             crt.offsetMax = Vector2.zero;
 
             closeGO.AddComponent<CanvasRenderer>();
-            closeGO.AddComponent<Image>().color = new Color(0.941f, 0.043f, 0.122f, 1f);
+            closeGO.AddComponent<Image>().color = StatsAppTheme.Danger;
 
             var closeBtn = closeGO.AddComponent<Button>();
             closeBtn.onClick.AddListener((UnityAction)OnCloseClicked);
@@ -800,7 +925,7 @@ namespace StatisticMod
             ctt.alignment = TextAlignmentOptions.Center;
             if (_gameFont != null) ctt.font = _gameFont;
             ctt.raycastTarget = false;
-            ctt.color = new Color32(255, 245, 220, 255);
+            ctt.color = StatsAppTheme.TextLight;
             SafeSetOutline(ctt, 0.15f);
             ctt.outlineColor = new Color32(0, 0, 0, 180);
 
@@ -1109,12 +1234,20 @@ namespace StatisticMod
             scrollGO.transform.SetAsLastSibling();
 
             var scrollRT = scrollGO.AddComponent<RectTransform>();
-            scrollRT.anchorMin = new Vector2(0.02f, 0.04f);
-            scrollRT.anchorMax = new Vector2(0.98f, 0.90f);
+            scrollRT.anchorMin = new Vector2(0.035f, StatsAppTheme.ContentBottom);
+            scrollRT.anchorMax = new Vector2(0.965f, StatsAppTheme.ContentTop);
             scrollRT.offsetMin = Vector2.zero;
             scrollRT.offsetMax = Vector2.zero;
 
             scrollGO.AddComponent<CanvasRenderer>();
+            var scrollPanel = scrollGO.AddComponent<Image>();
+            scrollPanel.color = StatsAppTheme.Surface;
+            scrollPanel.raycastTarget = false;
+
+            var scrollOutline = scrollGO.AddComponent<Outline>();
+            scrollOutline.effectColor = StatsAppTheme.Border;
+            scrollOutline.effectDistance = new Vector2(1f, -1f);
+
             var scrollRect = scrollGO.AddComponent<ScrollRect>();
             scrollRect.horizontal = false;
             scrollRect.vertical = true;
@@ -1134,7 +1267,7 @@ namespace StatisticMod
 
             viewportGO.AddComponent<CanvasRenderer>();
             var vpImg = viewportGO.AddComponent<Image>();
-            vpImg.color = new Color(1, 1, 1, 0.02f);
+            vpImg.color = new Color(1f, 1f, 1f, 0.02f);
             vpImg.raycastTarget = true;
 
             var vpMask = viewportGO.AddComponent<Mask>();
@@ -1155,9 +1288,9 @@ namespace StatisticMod
             var grid = contentGO.AddComponent<GridLayoutGroup>();
             grid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
             grid.constraintCount = 3;
-            grid.cellSize = new Vector2(205, 90);
-            grid.spacing = new Vector2(14, 14);
-            grid.padding = new RectOffset(10, 18, 18, 18);
+            grid.cellSize = new Vector2(StatsAppTheme.TileWidth, StatsAppTheme.TileHeight);
+            grid.spacing = new Vector2(10f, 10f);
+            grid.padding = new RectOffset(14, 20, 14, 16);
             grid.childAlignment = TextAnchor.UpperLeft;
 
             scrollRect.viewport = viewportRT;
@@ -1179,7 +1312,7 @@ namespace StatisticMod
 
             sbGO.AddComponent<CanvasRenderer>();
             var sbBg = sbGO.AddComponent<Image>();
-            sbBg.color = new Color(0.02f, 0.08f, 0.12f, 0.75f);
+            sbBg.color = StatsAppTheme.ScrollTrack;
 
             var sb = sbGO.AddComponent<UnityEngine.UI.Scrollbar>();
             sb.direction = UnityEngine.UI.Scrollbar.Direction.BottomToTop;
@@ -1205,7 +1338,7 @@ namespace StatisticMod
 
             handle.AddComponent<CanvasRenderer>();
             var hImg = handle.AddComponent<Image>();
-            hImg.color = new Color(0.18f, 0.65f, 0.9f, 0.95f);
+            hImg.color = StatsAppTheme.ScrollThumb;
 
             sb.handleRect = hRT;
             sb.targetGraphic = hImg;
@@ -1248,61 +1381,121 @@ namespace StatisticMod
 
             var go = new GameObject("FallbackTile");
             var rt = go.AddComponent<RectTransform>();
-            rt.sizeDelta = new Vector2(205, 90);
+            rt.sizeDelta = new Vector2(StatsAppTheme.TileWidth, StatsAppTheme.TileHeight);
 
             go.AddComponent<CanvasRenderer>();
             var img = go.AddComponent<Image>();
-            img.color = new Color(0.055f, 0.176f, 0.271f, 1f);
+            img.color = StatsAppTheme.TileBackground;
+            img.raycastTarget = false;
+
+            // Delikatny cień jest częścią template, więc każdy tryb ma identyczną kartę.
+            AddTileShadow(go.transform);
+
+            var outline = go.AddComponent<Outline>();
+            outline.effectColor = StatsAppTheme.TileBorder;
+            outline.effectDistance = new Vector2(1f, -1f);
+            outline.useGraphicAlpha = false;
+
+            // Osobne jasne pole pod ikonę – wizualnie oddziela produkt od danych.
+            var iconSurfaceGO = new GameObject("Icon Surface");
+            iconSurfaceGO.transform.SetParent(go.transform, false);
+            var iconSurfaceRT = iconSurfaceGO.AddComponent<RectTransform>();
+            iconSurfaceRT.anchorMin = new Vector2(0.035f, 0.10f);
+            iconSurfaceRT.anchorMax = new Vector2(0.300f, 0.90f);
+            iconSurfaceRT.offsetMin = Vector2.zero;
+            iconSurfaceRT.offsetMax = Vector2.zero;
+            iconSurfaceGO.AddComponent<CanvasRenderer>();
+            var iconSurfaceImg = iconSurfaceGO.AddComponent<Image>();
+            iconSurfaceImg.color = StatsAppTheme.TileIconBackground;
+            iconSurfaceImg.raycastTarget = false;
+            var iconOutline = iconSurfaceGO.AddComponent<Outline>();
+            iconOutline.effectColor = StatsAppTheme.TileIconBorder;
+            iconOutline.effectDistance = new Vector2(1f, -1f);
+            iconOutline.useGraphicAlpha = false;
+
+            var separatorGO = new GameObject("Text Separator");
+            separatorGO.transform.SetParent(go.transform, false);
+            var separatorRT = separatorGO.AddComponent<RectTransform>();
+            separatorRT.anchorMin = new Vector2(0.325f, 0.705f);
+            separatorRT.anchorMax = new Vector2(0.965f, 0.705f);
+            separatorRT.pivot = new Vector2(0.5f, 0.5f);
+            separatorRT.sizeDelta = new Vector2(0f, 1f);
+            separatorGO.AddComponent<CanvasRenderer>();
+            var separatorImg = separatorGO.AddComponent<Image>();
+            separatorImg.color = StatsAppTheme.TileSeparator;
+            separatorImg.raycastTarget = false;
 
             var nameGO = new GameObject("Product Name");
             nameGO.transform.SetParent(go.transform, false);
             var nrt = nameGO.AddComponent<RectTransform>();
-            nrt.anchorMin = new Vector2(0.27f, 0.72f);
-            nrt.anchorMax = new Vector2(0.98f, 0.95f);
+            nrt.anchorMin = new Vector2(0.325f, 0.735f);
+            nrt.anchorMax = new Vector2(0.965f, 0.925f);
             nrt.offsetMin = Vector2.zero;
             nrt.offsetMax = Vector2.zero;
 
             var tmp = nameGO.AddComponent<TextMeshProUGUI>();
             tmp.text = "Produkt";
             tmp.raycastTarget = false;
-            ApplyGameTmp(tmp, 14f, TextAlignmentOptions.Left);
+            ApplyGameTmp(tmp, 10.8f, TextAlignmentOptions.MidlineLeft);
+            tmp.fontStyle = FontStyles.Bold;
+            tmp.color = StatsAppTheme.TileTitle;
+            tmp.enableAutoSizing = true;
+            tmp.fontSizeMin = 7.2f;
+            tmp.fontSizeMax = 10.8f;
+            tmp.enableWordWrapping = false;
+            tmp.overflowMode = TextOverflowModes.Ellipsis;
+            tmp.margin = new Vector4(1f, 0f, 2f, 0f);
+            SafeSetOutline(tmp, 0f);
 
             var infoGO = new GameObject("Product Brand");
             infoGO.transform.SetParent(go.transform, false);
             var irt = infoGO.AddComponent<RectTransform>();
-            irt.anchorMin = new Vector2(0.27f, 0.10f);
-            irt.anchorMax = new Vector2(0.98f, 0.70f);
+            irt.anchorMin = new Vector2(0.325f, 0.10f);
+            irt.anchorMax = new Vector2(0.965f, 0.675f);
             irt.offsetMin = Vector2.zero;
             irt.offsetMax = Vector2.zero;
 
             var tmp2 = infoGO.AddComponent<TextMeshProUGUI>();
-            tmp2.text = "• Sprzedano: 0\n• Przychód: 0\n• Wyrzucono: 0 (0)";
+            tmp2.text = "Sprzedane: 0\nPrzychód: 0\nWyrzucone: 0\nStrata: 0";
             tmp2.raycastTarget = false;
-            ApplyGameTmp(tmp2, 9.5f, TextAlignmentOptions.Left);
-            tmp2.lineSpacing = 0f; // albo 0.5f
+            ApplyGameTmp(tmp2, 8.7f, TextAlignmentOptions.TopLeft);
+            tmp2.color = StatsAppTheme.TileText;
+            tmp2.enableAutoSizing = true;
+            tmp2.fontSizeMin = 6.8f;
+            tmp2.fontSizeMax = 8.7f;
+            tmp2.lineSpacing = 0f;
             tmp2.enableWordWrapping = false;
-            tmp2.overflowMode = TextOverflowModes.Overflow;
-
-
+            tmp2.overflowMode = TextOverflowModes.Ellipsis;
+            tmp2.margin = new Vector4(1f, 1f, 2f, 0f);
+            SafeSetOutline(tmp2, 0f);
 
             var iconGO = new GameObject("Product Icon");
             iconGO.transform.SetParent(go.transform, false);
             var icrt = iconGO.AddComponent<RectTransform>();
-            icrt.anchorMin = new Vector2(0.04f, 0.22f);
-            icrt.anchorMax = new Vector2(0.25f, 0.88f);
+            icrt.anchorMin = new Vector2(0.050f, 0.17f);
+            icrt.anchorMax = new Vector2(0.280f, 0.83f);
             icrt.offsetMin = Vector2.zero;
             icrt.offsetMax = Vector2.zero;
-
 
             iconGO.AddComponent<CanvasRenderer>();
             var icImg = iconGO.AddComponent<Image>();
             icImg.color = Color.white;
             icImg.preserveAspect = true;
             icImg.enabled = true;
+            icImg.raycastTarget = false;
 
             var le = go.AddComponent<LayoutElement>();
-            le.preferredWidth = 205;
-            le.preferredHeight = 90;
+            le.preferredWidth = StatsAppTheme.TileWidth;
+            le.preferredHeight = StatsAppTheme.TileHeight;
+
+            // Nie pozwalamy długim tłumaczeniom wyjść poza kartę.
+            if (go.GetComponent<RectMask2D>() == null)
+                go.AddComponent<RectMask2D>();
+
+            // Pass 2b: template i każda jego instancja korzystają z dokładnie tej samej
+            // wymuszonej warstwy wizualnej. Dzięki temu żaden stary tint / materiał
+            // nie może przywrócić granatowego kafelka.
+            ForceProfessionalTileVisuals(go.transform);
 
             go.SetActive(false);
             return go;
@@ -1406,6 +1599,7 @@ namespace StatisticMod
                         icon = sp;
                     }
 
+                    title = FormatTileProductName(title, p.ProductId, false);
                     SetTmpText(tile.transform, "Product Name", title);
 
                     // Ikona
@@ -1443,6 +1637,7 @@ namespace StatisticMod
                     catch { /* Ignorujemy błędy wizualne, by nie przerwać pętli */ }
 
                     DisableRaycastOnAllTMP(tile.transform);
+                    ForceProfessionalTileVisuals(tile.transform);
                     tile.SetActive(true);
                     built++;
                 }
@@ -1459,6 +1654,10 @@ namespace StatisticMod
                     var rt = _tilesContent.GetComponent<RectTransform>();
                     if (rt != null) rt.sizeDelta = new Vector2(rt.sizeDelta.x, newHeight);
                 }
+
+                // Pass 2b: drugi etap wymuszenia po zbudowaniu całej siatki.
+                ReapplyProfessionalTileStyles();
+                ScheduleProfessionalTileReapply();
 
                 UpdateDayHeaderUI();
                 Plugin.Log.LogWarning($"[{DateTime.Now:HH:mm:ss.fff}] [StatsUI] BuildStatsTiles END - Sukces (Zbudowano: {built})");
@@ -1838,60 +2037,50 @@ namespace StatisticMod
 
         private void AddTileShadow(Transform tile)
         {
-            // Fake shadow behind tile (premium card look)
-            var shadow = new GameObject("Shadow");
-            shadow.transform.SetParent(tile, false);
-            shadow.transform.SetAsFirstSibling();
+            if (tile == null) return;
 
-            var rt = shadow.AddComponent<RectTransform>();
-            rt.anchorMin = Vector2.zero;
-            rt.anchorMax = Vector2.one;
-            rt.offsetMin = new Vector2(-3f, -5f);
-            rt.offsetMax = new Vector2(3f, 3f);
+            var shadow = tile.GetComponent<UnityEngine.UI.Shadow>();
+            if (shadow == null)
+                shadow = tile.gameObject.AddComponent<UnityEngine.UI.Shadow>();
 
-            shadow.AddComponent<CanvasRenderer>();
-            var img = shadow.AddComponent<Image>();
-            img.raycastTarget = false;
-            img.color = new Color(0f, 0f, 0f, 0.22f);
+            shadow.effectColor = StatsAppTheme.Shadow;
+            shadow.effectDistance = new Vector2(2f, -2f);
+            shadow.useGraphicAlpha = true;
         }
 
         private void AddStatsStatusBar(Transform tile, ProductLine p)
         {
-            // Thin strip at bottom to hint "health" of product (loss vs revenue)
-            var bar = new GameObject("StatusBar");
-            bar.transform.SetParent(tile, false);
+            if (tile == null) return;
 
-            var brt = bar.AddComponent<RectTransform>();
-            brt.anchorMin = new Vector2(0f, 0f);
-            brt.anchorMax = new Vector2(1f, 0f);
-            brt.pivot = new Vector2(0.5f, 0f);
-            brt.sizeDelta = new Vector2(0f, 6f);
-            brt.anchoredPosition = new Vector2(0f, 0f);
+            Transform existing = tile.Find("StatusBar");
+            Image img = existing != null ? existing.GetComponent<Image>() : null;
 
-            bar.AddComponent<CanvasRenderer>();
-            var img = bar.AddComponent<Image>();
-            img.raycastTarget = false;
+            if (img == null)
+            {
+                var bar = new GameObject("StatusBar");
+                bar.transform.SetParent(tile, false);
 
-            // color logic:
-            // - green-ish when no thrown
-            // - orange when thrown exists
-            // - red when loss is big vs revenue
+                var brt = bar.AddComponent<RectTransform>();
+                brt.anchorMin = new Vector2(0f, 0f);
+                brt.anchorMax = new Vector2(0.018f, 1f);
+                brt.offsetMin = Vector2.zero;
+                brt.offsetMax = Vector2.zero;
+
+                bar.AddComponent<CanvasRenderer>();
+                img = bar.AddComponent<Image>();
+                img.raycastTarget = false;
+            }
+
             float revenue = (float)p.SoldRevenue;
             float loss = (float)p.ThrownValue;
             float ratio = (revenue <= 0.01f) ? (loss > 0.01f ? 999f : 0f) : (loss / revenue);
 
-            if (p.ThrownUnits <= 0)
-            {
-                img.color = new Color(0.45f, 0.95f, 0.55f, 0.30f);
-            }
+            if (p.ThrownUnits <= 0 && p.ThrownWeightKg <= 0.0001f)
+                img.color = StatsAppTheme.Positive;
             else if (ratio >= 0.50f)
-            {
-                img.color = new Color(1f, 0.25f, 0.25f, 0.85f);
-            }
+                img.color = StatsAppTheme.Negative;
             else
-            {
-                img.color = new Color(1f, 0.55f, 0.15f, 0.85f);
-            }
+                img.color = StatsAppTheme.Warning;
         }
 
         private void ApplyStatsPremiumTypography(Transform tile)
@@ -1899,28 +2088,34 @@ namespace StatisticMod
             var name = tile.Find("Product Name")?.GetComponent<TextMeshProUGUI>();
             if (name != null)
             {
-                name.fontSize = 14;
+                name.fontSize = 11.5f;
                 name.fontStyle = FontStyles.Bold;
                 if (_gameFont != null) name.font = _gameFont;
-                name.color = new Color32(255, 245, 220, 255);
-                SafeSetOutline(name, 0.10f);
-                name.outlineColor = new Color32(0, 0, 0, 170);
+                name.color = StatsAppTheme.TileTitle;
+                SafeSetOutline(name, 0f);
+                name.enableAutoSizing = true;
+                name.fontSizeMin = 8f;
+                name.fontSizeMax = 11.5f;
                 name.enableWordWrapping = false;
                 name.overflowMode = TextOverflowModes.Ellipsis;
+                name.alignment = TextAlignmentOptions.MidlineLeft;
             }
 
             var info = tile.Find("Product Brand")?.GetComponent<TextMeshProUGUI>();
             if (info != null)
             {
-                info.fontSize = 10.5f;
+                info.fontSize = 8.7f;
                 info.fontStyle = FontStyles.Normal;
                 if (_gameFont != null) info.font = _gameFont;
-                info.color = new Color32(235, 225, 205, 230);
-                SafeSetOutline(info, 0.06f);
-                info.outlineColor = new Color32(0, 0, 0, 150);
-                info.lineSpacing = 0f;        // albo 0.5f max
-                info.enableWordWrapping = true; // newline’y i tak masz, ale TMP lepiej liczy layout
-
+                info.color = StatsAppTheme.TileText;
+                SafeSetOutline(info, 0f);
+                info.enableAutoSizing = true;
+                info.fontSizeMin = 6.8f;
+                info.fontSizeMax = 8.7f;
+                info.lineSpacing = 0f;
+                info.enableWordWrapping = false;
+                info.overflowMode = TextOverflowModes.Ellipsis;
+                info.alignment = TextAlignmentOptions.TopLeft;
             }
         }
 
@@ -1930,7 +2125,16 @@ namespace StatisticMod
 
             var img = btn.GetComponent<Image>();
             if (img != null)
-                img.color = new Color(0f, 0f, 0f, 0.28f);
+            {
+                img.color = StatsAppTheme.Button;
+                img.raycastTarget = true;
+            }
+
+            // Delikatna ramka zamiast mocnego, "plastikowego" efektu.
+            var outline = btn.GetComponent<Outline>();
+            if (outline == null) outline = btn.gameObject.AddComponent<Outline>();
+            outline.effectColor = new Color(StatsAppTheme.HeaderBorder.r, StatsAppTheme.HeaderBorder.g, StatsAppTheme.HeaderBorder.b, 0.70f);
+            outline.effectDistance = new Vector2(1f, -1f);
 
             var tr = btn.transform;
             if (tr.Find("Shadow") == null)
@@ -1942,13 +2146,13 @@ namespace StatisticMod
                 var rt = sh.AddComponent<RectTransform>();
                 rt.anchorMin = Vector2.zero;
                 rt.anchorMax = Vector2.one;
-                rt.offsetMin = new Vector2(-2f, -3f);
-                rt.offsetMax = new Vector2(2f, 1f);
+                rt.offsetMin = new Vector2(-1f, -2f);
+                rt.offsetMax = new Vector2(1f, 1f);
 
                 sh.AddComponent<CanvasRenderer>();
                 var simg = sh.AddComponent<Image>();
                 simg.raycastTarget = false;
-                simg.color = new Color(0f, 0f, 0f, 0.32f);
+                simg.color = StatsAppTheme.Shadow;
             }
 
             var tmp = btn.GetComponentInChildren<TextMeshProUGUI>(true);
@@ -1956,14 +2160,10 @@ namespace StatisticMod
             {
                 if (_gameFont != null) tmp.font = _gameFont;
                 tmp.fontStyle = FontStyles.Bold;
-                tmp.color = new Color32(255, 245, 220, 255);
+                tmp.color = StatsAppTheme.TextLight;
 
-                // ✅ bezpiecznie (u Ciebie to potrafi crashować)
-                SafeSetOutline(tmp, 0.10f);
-                tmp.outlineColor = new Color32(0, 0, 0, 180);
-
-                // ❌ NIE ruszamy tmp.fontSize tutaj
-                // (bo każdy przycisk ma własny rozmiar: sort=12, strzałka=16, tytuł=24 itd.)
+                SafeSetOutline(tmp, 0.06f);
+                tmp.outlineColor = new Color(0f, 0f, 0f, 0.45f);
             }
         }
 
@@ -1974,20 +2174,18 @@ namespace StatisticMod
             var img = btn.GetComponent<Image>();
             if (img != null)
             {
-                // główny czerwony (game UI style)
-                img.color = new Color(0.75f, 0.18f, 0.18f, 0.95f);
+                img.color = StatsAppTheme.Danger;
             }
 
             var tmp = btn.GetComponentInChildren<TextMeshProUGUI>(true);
             if (tmp != null)
             {
                 tmp.fontStyle = FontStyles.Bold;
-                tmp.color = Color.white;
-                tmp.outlineWidth = 0.12f;
-                tmp.outlineColor = new Color(0f, 0f, 0f, 0.7f);
+                tmp.color = StatsAppTheme.TextLight;
+                SafeSetOutline(tmp, 0.06f);
+                tmp.outlineColor = new Color(0f, 0f, 0f, 0.45f);
             }
 
-            // delikatny ciemniejszy cień pod spodem
             var tr = btn.transform;
             var existingShadow = tr.Find("RedShadow");
             if (existingShadow == null)
@@ -1999,13 +2197,13 @@ namespace StatisticMod
                 var rt = sh.AddComponent<RectTransform>();
                 rt.anchorMin = Vector2.zero;
                 rt.anchorMax = Vector2.one;
-                rt.offsetMin = new Vector2(-2f, -3f);
-                rt.offsetMax = new Vector2(2f, 1f);
+                rt.offsetMin = new Vector2(-1f, -2f);
+                rt.offsetMax = new Vector2(1f, 1f);
 
                 sh.AddComponent<CanvasRenderer>();
                 var simg = sh.AddComponent<Image>();
                 simg.raycastTarget = false;
-                simg.color = new Color(0.35f, 0.05f, 0.05f, 0.7f);
+                simg.color = StatsAppTheme.DangerDark;
             }
         }
         private static void DisableGameScriptsOnTile(Transform root)
@@ -2201,6 +2399,7 @@ namespace StatisticMod
 
                     EnterChartsLayout();
                     BuildChartsWindow();
+                    ScheduleChartsPass3();
                     break;
             }
         }
@@ -2246,7 +2445,7 @@ namespace StatisticMod
                 var nameTmp = GetTmpComponent(tile.transform, "Product Name");
                 if (nameTmp != null)
                 {
-                    nameTmp.text = name; //
+                    nameTmp.text = FormatTileProductName(name, pid, false); //
                     nameTmp.enableAutoSizing = true;
                     nameTmp.fontSizeMin = 6f;
                     nameTmp.fontSizeMax = 14f;
@@ -2270,6 +2469,7 @@ namespace StatisticMod
 
                 AdjustProductTileContent(tile.transform);
                 ApplyExpirationAccent(tile.transform, global[pid]);
+                ForceProfessionalTileVisuals(tile.transform);
                 built++;
             }
             ForceTilesLayout(built);
@@ -2404,7 +2604,7 @@ namespace StatisticMod
                 var nameTmp = GetTmpComponent(tile.transform, "Product Name");
                 if (nameTmp != null)
                 {
-                    nameTmp.text = name;
+                    nameTmp.text = FormatTileProductName(name, pid, true);
                     nameTmp.enableAutoSizing = true;
                     nameTmp.fontSizeMin = 8f;
                     nameTmp.fontSizeMax = 13f;
@@ -2439,12 +2639,12 @@ namespace StatisticMod
                     float totalSalesValue = totalQty * sellP;
 
                     infoTmp.text =
-                        $"{Plugin.T("Cena", "Price")}: <color=#FFD700>{Plugin.T("Z", "B")}: {buyP:N2} $</color> | <color=#90EE90>{Plugin.T("S", "S")}: {sellP:N2} $</color>\n" +
-                        $"{Plugin.T("Stan", "Stock")}: <color=#00FFFF>{Plugin.T("S", "S")}: {sStockStr}</color> | <color=#FF8C00>{Plugin.T("M", "W")}: {wStockStr}</color>\n" +
-                        $"{Plugin.T("Wartość", "Value")} {Plugin.T("Z", "B")}: <color=#FFFF00>{totalCostValue:N2} $</color> | {Plugin.T("S", "S")}: <color=#00FF00>{totalSalesValue:N2} $</color>";
+                        $"{Plugin.T("Cena", "Price")}: <color={StatsAppTheme.WarningHex}><b>{Plugin.T("Z", "B")}: {buyP:N2} $</b></color> | <color={StatsAppTheme.PositiveHex}><b>{Plugin.T("S", "S")}: {sellP:N2} $</b></color>\n" +
+                        $"{Plugin.T("Stan", "Stock")}: <color={StatsAppTheme.InfoHex}><b>{Plugin.T("S", "S")}: {sStockStr}</b></color> | <color={StatsAppTheme.WarningHex}><b>{Plugin.T("M", "W")}: {wStockStr}</b></color>\n" +
+                        $"{Plugin.T("Wartość", "Value")} {Plugin.T("Z", "B")}: <color={StatsAppTheme.PurpleHex}><b>{totalCostValue:N2} $</b></color> | {Plugin.T("S", "S")}: <color={StatsAppTheme.PositiveHex}><b>{totalSalesValue:N2} $</b></color>";
 
-                    infoTmp.fontSize = 8f;
-                    infoTmp.lineSpacing = 5f;
+                    infoTmp.fontSize = 8.7f;
+                    infoTmp.lineSpacing = 0f;
                 }
 
                 var iconTr = tile.transform.Find("Product Icon");
@@ -2455,6 +2655,7 @@ namespace StatisticMod
                 }
 
                 AdjustProductTileContent(tile.transform);
+                ForceProfessionalTileVisuals(tile.transform);
                 built++;
             }
             ForceTilesLayout(built);
@@ -2557,57 +2758,54 @@ namespace StatisticMod
 
             int lines = 0;
             var sb = new System.Text.StringBuilder();
-            bool isWeight = IsWeightProduct(productId); //
-            string unit = isWeight ? "kg" : Plugin.T("szt", "pcs");
+            bool isWeight = IsWeightProduct(productId);
+            string unit = isWeight ? "kg" : Plugin.T("szt.", "pcs");
 
             foreach (var kv in batches)
             {
                 if (lines >= maxLines) break;
-                int d = kv.Key; // dni
-                int c = kv.Value; // ilość
+                int d = kv.Key;
+                int c = kv.Value;
                 if (c <= 0) continue;
 
                 if (sb.Length > 0) sb.Append('\n');
 
-                // Formatowanie ilości (bez spacji)
                 string valStr;
                 if (isWeight)
                 {
-                    float kgPerUnit = SalesUnifiedFinal.WeightPerUnit.TryGetValue(productId, out float w) ? w : 1.0f; //
-                    valStr = (c * kgPerUnit).ToString ("N2") + " kg";
+                    float kgPerUnit = SalesUnifiedFinal.WeightPerUnit.TryGetValue(productId, out float w) ? w : 1.0f;
+                    valStr = (c * kgPerUnit).ToString("N2") + " kg";
                 }
                 else
                 {
                     valStr = c.ToString("N0") + " " + unit;
                 }
 
-                // Logika kolorowania - cała wartość w mocnym kolorze
                 string label;
                 string colorHex;
 
                 if (d < 0)
                 {
-                    label = $"<color=#FF0000>{Plugin.T("PO TERMINIE", "EXPIRED")}</color>";
-                    colorHex = "#FF0000"; // Czysty czerwony
+                    label = Plugin.T("PO TERMINIE", "EXPIRED");
+                    colorHex = StatsAppTheme.NegativeHex;
                 }
                 else if (d == 0)
                 {
-                    label = $"<color=#FF0000>{Plugin.T("DZIŚ", "TODAY")}</color>";
-                    colorHex = "#FF0000"; // Czysty czerwony
+                    label = Plugin.T("DZIŚ", "TODAY");
+                    colorHex = StatsAppTheme.NegativeHex;
                 }
                 else if (d == 1)
                 {
-                    label = $"<color=#FF8C00>{Plugin.T("JUTRO", "TOMORROW")}</color>";
-                    colorHex = "#FF8C00"; // OrangeRed
+                    label = Plugin.T("JUTRO", "TOMORROW");
+                    colorHex = StatsAppTheme.WarningHex;
                 }
                 else
                 {
                     label = Plugin.T($"za {d} dni", $"in {d} days");
-                    colorHex = "#00FF00"; // Limonkowy zielony
+                    colorHex = StatsAppTheme.PositiveHex;
                 }
 
-                // Biała etykieta i bardzo wyraźna kolorowa wartość
-                sb.Append($"• <color=#FFFFFF>{label} :</color> <color={colorHex}><b>{valStr}</b></color>");
+                sb.Append($"<color={colorHex}><b>{label}</b></color>: <color={colorHex}><b>{valStr}</b></color>");
                 lines++;
             }
             return sb.ToString();
@@ -2617,37 +2815,35 @@ namespace StatisticMod
         {
             if (tile == null || batches == null || batches.Count == 0) return;
 
-            // min daysLeft
             int minDay = int.MaxValue;
             foreach (var d in batches.Keys)
                 if (d < minDay) minDay = d;
 
             Color accent;
-            if (minDay <= 0) accent = new Color(0.90f, 0.20f, 0.22f);        // czerwony
-            else if (minDay == 1) accent = new Color(1.00f, 0.60f, 0.10f);  // pomarańczowy
-            else accent = new Color(0.25f, 0.85f, 0.45f);                   // zielony
+            if (minDay <= 0) accent = StatsAppTheme.Negative;
+            else if (minDay == 1) accent = StatsAppTheme.Warning;
+            else accent = StatsAppTheme.Positive;
 
             var existing = tile.Find("ExpiryAccent");
             if (existing == null)
             {
                 var bar = new GameObject("ExpiryAccent");
                 bar.transform.SetParent(tile, false);
-                bar.transform.SetAsFirstSibling();
 
                 var rt = bar.AddComponent<RectTransform>();
                 rt.anchorMin = new Vector2(0f, 0f);
-                rt.anchorMax = new Vector2(0.022f, 1f);
+                rt.anchorMax = new Vector2(0.018f, 1f);
                 rt.offsetMin = Vector2.zero;
                 rt.offsetMax = Vector2.zero;
 
                 bar.AddComponent<CanvasRenderer>();
-                var img = bar.AddComponent<UnityEngine.UI.Image>();
+                var img = bar.AddComponent<Image>();
                 img.raycastTarget = false;
                 img.color = accent;
             }
             else
             {
-                var img = existing.GetComponent<UnityEngine.UI.Image>();
+                var img = existing.GetComponent<Image>();
                 if (img != null) img.color = accent;
             }
         }
@@ -2691,6 +2887,279 @@ namespace StatisticMod
         }
 
 
+        /// <summary>
+        /// Pass 2b - twarde wymuszenie stylu pojedynczego kafelka.
+        /// Robimy to na gotowej instancji, a nie tylko na template, ponieważ w Unity/IL2CPP
+        /// komponenty Graphic/TMP potrafią odziedziczyć lub odzyskać starszy tint/material
+        /// podczas SetActive / przebudowy layoutu.
+        /// </summary>
+        private void ForceProfessionalTileVisuals(Transform tile)
+        {
+            if (tile == null) return;
+
+            // Pass 3: styl produktu stosujemy WYŁĄCZNIE do prawdziwych kafelków produktów.
+            // PODSUMOWANIE ma własną strukturę (Title/Value/Details) i nie może dostać
+            // automatycznie tworzonego "Icon Surface", bo zasłaniał on zawartość kart.
+            if (tile.Find("Product Name") == null || tile.Find("Product Brand") == null)
+                return;
+
+            try
+            {
+                var tileRt = tile.GetComponent<RectTransform>();
+                if (tileRt != null)
+                    tileRt.sizeDelta = new Vector2(StatsAppTheme.TileWidth, StatsAppTheme.TileHeight);
+
+                // ROOT CARD - celowo zerujemy sprite/material, żeby kolor nie był mnożony
+                // przez stary asset lub materiał z poprzedniego wyglądu.
+                var background = tile.GetComponent<Image>();
+                if (background == null)
+                {
+                    if (tile.GetComponent<CanvasRenderer>() == null)
+                        tile.gameObject.AddComponent<CanvasRenderer>();
+                    background = tile.gameObject.AddComponent<Image>();
+                }
+
+                background.enabled = true;
+                background.raycastTarget = false;
+                background.sprite = null;
+                background.overrideSprite = null;
+                background.material = null;
+                background.type = Image.Type.Simple;
+                background.preserveAspect = false;
+                background.color = StatsAppTheme.TileBackground;
+
+                var outline = tile.GetComponent<Outline>();
+                if (outline == null) outline = tile.gameObject.AddComponent<Outline>();
+                outline.effectColor = StatsAppTheme.TileBorder;
+                outline.effectDistance = new Vector2(1f, -1f);
+                outline.useGraphicAlpha = false;
+
+                var shadow = tile.GetComponent<UnityEngine.UI.Shadow>();
+                if (shadow == null) shadow = tile.gameObject.AddComponent<UnityEngine.UI.Shadow>();
+                shadow.effectColor = StatsAppTheme.Shadow;
+                shadow.effectDistance = new Vector2(1.5f, -1.5f);
+                shadow.useGraphicAlpha = true;
+
+                // ICON SURFACE
+                Transform iconSurface = tile.Find("Icon Surface");
+                if (iconSurface == null)
+                {
+                    var go = new GameObject("Icon Surface");
+                    go.transform.SetParent(tile, false);
+                    iconSurface = go.transform;
+                    go.AddComponent<RectTransform>();
+                    go.AddComponent<CanvasRenderer>();
+                    go.AddComponent<Image>();
+                    go.AddComponent<Outline>();
+                }
+
+                var iconSurfaceRt = iconSurface.GetComponent<RectTransform>();
+                if (iconSurfaceRt != null)
+                {
+                    iconSurfaceRt.anchorMin = new Vector2(0.035f, 0.10f);
+                    iconSurfaceRt.anchorMax = new Vector2(0.300f, 0.90f);
+                    iconSurfaceRt.offsetMin = Vector2.zero;
+                    iconSurfaceRt.offsetMax = Vector2.zero;
+                }
+
+                var iconSurfaceImg = iconSurface.GetComponent<Image>();
+                if (iconSurfaceImg != null)
+                {
+                    iconSurfaceImg.enabled = true;
+                    iconSurfaceImg.raycastTarget = false;
+                    iconSurfaceImg.sprite = null;
+                    iconSurfaceImg.overrideSprite = null;
+                    iconSurfaceImg.material = null;
+                    iconSurfaceImg.type = Image.Type.Simple;
+                    iconSurfaceImg.color = StatsAppTheme.TileIconBackground;
+                }
+
+                var iconSurfaceOutline = iconSurface.GetComponent<Outline>();
+                if (iconSurfaceOutline == null) iconSurfaceOutline = iconSurface.gameObject.AddComponent<Outline>();
+                iconSurfaceOutline.effectColor = StatsAppTheme.TileIconBorder;
+                iconSurfaceOutline.effectDistance = new Vector2(1f, -1f);
+                iconSurfaceOutline.useGraphicAlpha = false;
+                iconSurface.SetAsFirstSibling();
+
+                // SEPARATOR
+                Transform separator = tile.Find("Text Separator");
+                if (separator == null)
+                {
+                    var go = new GameObject("Text Separator");
+                    go.transform.SetParent(tile, false);
+                    separator = go.transform;
+                    go.AddComponent<RectTransform>();
+                    go.AddComponent<CanvasRenderer>();
+                    go.AddComponent<Image>();
+                }
+
+                var separatorRt = separator.GetComponent<RectTransform>();
+                if (separatorRt != null)
+                {
+                    separatorRt.anchorMin = new Vector2(0.325f, 0.705f);
+                    separatorRt.anchorMax = new Vector2(0.965f, 0.705f);
+                    separatorRt.pivot = new Vector2(0.5f, 0.5f);
+                    separatorRt.sizeDelta = new Vector2(0f, 1f);
+                    separatorRt.offsetMin = new Vector2(separatorRt.offsetMin.x, 0f);
+                    separatorRt.offsetMax = new Vector2(separatorRt.offsetMax.x, 0f);
+                }
+
+                var separatorImg = separator.GetComponent<Image>();
+                if (separatorImg != null)
+                {
+                    separatorImg.enabled = true;
+                    separatorImg.raycastTarget = false;
+                    separatorImg.sprite = null;
+                    separatorImg.overrideSprite = null;
+                    separatorImg.material = null;
+                    separatorImg.color = StatsAppTheme.TileSeparator;
+                }
+
+                // TITLE
+                var nameTr = tile.Find("Product Name");
+                if (nameTr != null)
+                {
+                    var rt = nameTr.GetComponent<RectTransform>();
+                    if (rt != null)
+                    {
+                        rt.anchorMin = new Vector2(0.325f, 0.735f);
+                        rt.anchorMax = new Vector2(0.965f, 0.925f);
+                        rt.offsetMin = Vector2.zero;
+                        rt.offsetMax = Vector2.zero;
+                    }
+
+                    var tmp = nameTr.GetComponent<TextMeshProUGUI>();
+                    if (tmp != null)
+                    {
+                        if (_gameFont != null) tmp.font = _gameFont;
+                        tmp.color = StatsAppTheme.TileTitle;
+                        tmp.fontStyle = FontStyles.Bold;
+                        tmp.alignment = TextAlignmentOptions.MidlineLeft;
+                        tmp.enableAutoSizing = true;
+                        tmp.fontSize = 10.5f;
+                        tmp.fontSizeMin = 7f;
+                        tmp.fontSizeMax = 10.5f;
+                        tmp.enableWordWrapping = false;
+                        tmp.overflowMode = TextOverflowModes.Ellipsis;
+                        tmp.margin = new Vector4(1f, 0f, 2f, 0f);
+                        SafeSetOutline(tmp, 0f);
+                    }
+                }
+
+                // INFO BODY
+                var infoTr = tile.Find("Product Brand");
+                if (infoTr != null)
+                {
+                    var rt = infoTr.GetComponent<RectTransform>();
+                    if (rt != null)
+                    {
+                        rt.anchorMin = new Vector2(0.325f, 0.10f);
+                        rt.anchorMax = new Vector2(0.965f, 0.675f);
+                        rt.offsetMin = Vector2.zero;
+                        rt.offsetMax = Vector2.zero;
+                    }
+
+                    var tmp = infoTr.GetComponent<TextMeshProUGUI>();
+                    if (tmp != null)
+                    {
+                        if (_gameFont != null) tmp.font = _gameFont;
+                        tmp.color = StatsAppTheme.TileText;
+                        tmp.fontStyle = FontStyles.Normal;
+                        tmp.alignment = TextAlignmentOptions.TopLeft;
+                        tmp.enableAutoSizing = true;
+                        tmp.fontSize = 8.7f;
+                        tmp.fontSizeMin = 6.7f;
+                        tmp.fontSizeMax = 8.7f;
+                        tmp.lineSpacing = 0f;
+                        tmp.paragraphSpacing = 0f;
+                        tmp.enableWordWrapping = false;
+                        tmp.overflowMode = TextOverflowModes.Ellipsis;
+                        tmp.margin = new Vector4(1f, 1f, 2f, 0f);
+                        SafeSetOutline(tmp, 0f);
+                    }
+                }
+
+                // PRODUCT ICON - nie tintujemy sprite produktu.
+                var iconTr = tile.Find("Product Icon");
+                if (iconTr != null)
+                {
+                    var rt = iconTr.GetComponent<RectTransform>();
+                    if (rt != null)
+                    {
+                        rt.anchorMin = new Vector2(0.050f, 0.17f);
+                        rt.anchorMax = new Vector2(0.280f, 0.83f);
+                        rt.offsetMin = Vector2.zero;
+                        rt.offsetMax = Vector2.zero;
+                    }
+
+                    var img = iconTr.GetComponent<Image>();
+                    if (img != null)
+                    {
+                        img.color = Color.white;
+                        img.material = null;
+                        img.preserveAspect = true;
+                        img.raycastTarget = false;
+                    }
+                }
+
+                // Status ma być tylko cienkim akcentem, nie dużym pasem.
+                string[] accentNames = { "StatusBar", "ExpiryAccent", "AnalysisAccent" };
+                for (int i = 0; i < accentNames.Length; i++)
+                {
+                    var accentTr = tile.Find(accentNames[i]);
+                    if (accentTr == null) continue;
+                    var rt = accentTr.GetComponent<RectTransform>();
+                    if (rt == null) continue;
+                    rt.anchorMin = new Vector2(0f, 0f);
+                    rt.anchorMax = new Vector2(0.012f, 1f);
+                    rt.offsetMin = Vector2.zero;
+                    rt.offsetMax = Vector2.zero;
+                }
+
+                if (tile.GetComponent<RectMask2D>() == null)
+                    tile.gameObject.AddComponent<RectMask2D>();
+            }
+            catch (Exception ex)
+            {
+                Plugin.DebugLog("[StatsUI] ForceProfessionalTileVisuals: " + ex.Message);
+            }
+        }
+
+        private bool UsesProfessionalProductTileLayout()
+        {
+            return _hubMode == HubMode.Stats ||
+                   _hubMode == HubMode.Expiration ||
+                   _hubMode == HubMode.Products ||
+                   _hubMode == HubMode.Analysis;
+        }
+
+        private void ReapplyProfessionalTileStyles()
+        {
+            if (_tilesContent == null || !UsesProfessionalProductTileLayout()) return;
+
+            for (int i = 0; i < _tilesContent.childCount; i++)
+            {
+                Transform child = _tilesContent.GetChild(i);
+                if (child == null) continue;
+                ForceProfessionalTileVisuals(child);
+            }
+        }
+
+        private void ScheduleProfessionalTileReapply()
+        {
+            if (!UsesProfessionalProductTileLayout()) return;
+
+            try
+            {
+                CancelInvoke(nameof(ReapplyProfessionalTileStyles));
+                Invoke(nameof(ReapplyProfessionalTileStyles), 0.04f);
+            }
+            catch
+            {
+                // Natychmiastowe wymuszenie już zostało wykonane; deferred pass jest tylko zabezpieczeniem.
+            }
+        }
+
         private void ForceTilesLayout(int built)
         {
             if (_tilesContent == null) return;
@@ -2699,6 +3168,14 @@ namespace StatisticMod
 
             LayoutRebuilder.ForceRebuildLayoutImmediate(_tilesContent);
             Canvas.ForceUpdateCanvases();
+
+            // Pass 3: tylko tryby oparte o kafelki produktów dostają wymuszony Product Tile skin.
+            // PODSUMOWANIE i WYKRESY mają własny layout i są stylowane niezależnie.
+            if (UsesProfessionalProductTileLayout())
+            {
+                ReapplyProfessionalTileStyles();
+                ScheduleProfessionalTileReapply();
+            }
         }
         private void RefreshHeaderForMode()
         {
@@ -2711,71 +3188,85 @@ namespace StatisticMod
 
         private void AdjustProductTileContent(Transform tile)
         {
-            // TITLE: niżej + margines
+            if (tile == null) return;
+
+            var background = tile.GetComponent<Image>();
+            if (background != null)
+                background.color = StatsAppTheme.TileBackground;
+
             var nameTr = tile.Find("Product Name");
             if (nameTr != null)
             {
                 var rt = nameTr.GetComponent<RectTransform>();
                 if (rt != null)
                 {
-                    rt.anchorMin = new Vector2(rt.anchorMin.x, 0.48f);
-                    rt.anchorMax = new Vector2(rt.anchorMax.x, 0.92f);
+                    rt.anchorMin = new Vector2(0.325f, 0.71f);
+                    rt.anchorMax = new Vector2(0.965f, 0.94f);
                     rt.offsetMin = Vector2.zero;
                     rt.offsetMax = Vector2.zero;
                 }
 
-                var tmp = nameTr.GetComponent<TMPro.TextMeshProUGUI>();
+                var tmp = nameTr.GetComponent<TextMeshProUGUI>();
                 if (tmp != null)
                 {
-                    tmp.alignment = TMPro.TextAlignmentOptions.TopLeft;
-                    tmp.margin = new Vector4(8f, 6f, 8f, 0f); // lewy/góra/prawy/dół
+                    tmp.alignment = TextAlignmentOptions.MidlineLeft;
+                    tmp.color = StatsAppTheme.TileTitle;
+                    tmp.fontStyle = FontStyles.Bold;
+                    tmp.enableAutoSizing = true;
+                    tmp.fontSizeMin = 7.5f;
+                    tmp.fontSizeMax = 11f;
+                    tmp.enableWordWrapping = false;
+                    tmp.overflowMode = TextOverflowModes.Ellipsis;
+                    tmp.margin = new Vector4(1f, 0f, 2f, 0f);
+                    SafeSetOutline(tmp, 0f);
                 }
             }
 
-            // INFO (Product Brand): delikatny padding
             var infoTr = tile.Find("Product Brand");
             if (infoTr != null)
             {
                 var rt = infoTr.GetComponent<RectTransform>();
                 if (rt != null)
                 {
-                    // przesunięcie w dół (zmniejszamy górny anchor)
-                    rt.anchorMin = new Vector2(rt.anchorMin.x, 0.12f);
-                    rt.anchorMax = new Vector2(rt.anchorMax.x, 0.45f);
+                    rt.anchorMin = new Vector2(0.325f, 0.10f);
+                    rt.anchorMax = new Vector2(0.965f, 0.665f);
                     rt.offsetMin = Vector2.zero;
                     rt.offsetMax = Vector2.zero;
                 }
 
-                var tmp = infoTr.GetComponent<TMPro.TextMeshProUGUI>();
+                var tmp = infoTr.GetComponent<TextMeshProUGUI>();
                 if (tmp != null)
                 {
-                    tmp.margin = new Vector4(12f, 0f, 12f, 12f);  // większy padding
-                    tmp.fontSize += 1;                           // lekko większy tekst
-                    tmp.lineSpacing = 5f;                        // większy odstęp między liniami
+                    tmp.color = StatsAppTheme.TileText;
+                    tmp.enableAutoSizing = true;
+                    tmp.fontSizeMin = 6.7f;
+                    tmp.fontSizeMax = 8.7f;
+                    tmp.fontSize = 8.7f;
+                    tmp.lineSpacing = 0f;
+                    tmp.paragraphSpacing = 0f;
+                    tmp.enableWordWrapping = false;
+                    tmp.overflowMode = TextOverflowModes.Ellipsis;
+                    tmp.alignment = TextAlignmentOptions.TopLeft;
+                    tmp.margin = new Vector4(1f, 1f, 2f, 0f);
+                    SafeSetOutline(tmp, 0f);
                 }
             }
 
-
-            // ICON: ramka + lepsze wpasowanie
             var iconTr = tile.Find("Product Icon");
             if (iconTr != null)
             {
-                // dodaj “frame” pod ikoną
-                if (iconTr.Find("Frame") == null)
+                var rt = iconTr.GetComponent<RectTransform>();
+                if (rt != null)
                 {
-                    var frame = new GameObject("Frame");
-                    frame.transform.SetParent(iconTr, false);
-                    frame.transform.SetAsFirstSibling();
-
-                    var rt = frame.AddComponent<RectTransform>();
-                    rt.anchorMin = Vector2.zero;
-                    rt.anchorMax = Vector2.one;
-                    rt.offsetMin = new Vector2(-4f, -4f);
-                    rt.offsetMax = new Vector2(4f, 4f);
-
+                    rt.anchorMin = new Vector2(0.050f, 0.17f);
+                    rt.anchorMax = new Vector2(0.280f, 0.83f);
+                    rt.offsetMin = Vector2.zero;
+                    rt.offsetMax = Vector2.zero;
                 }
-
             }
+
+            if (tile.GetComponent<RectMask2D>() == null)
+                tile.gameObject.AddComponent<RectMask2D>();
         }
        
         private void RefreshSortButtonText()
@@ -2823,17 +3314,76 @@ namespace StatisticMod
         {
             try
             {
+                // ID 9999 to specjalny, syntetyczny produkt używany przez stoisko z lodami.
+                // Nie posiada ProductSO, dlatego nie może być rozwiązywany wyłącznie przez TryGetSO().
+                if (Plugin.ProductCache != null &&
+                    Plugin.ProductCache.TryGet(productId, out var cachedName, out _) &&
+                    !string.IsNullOrWhiteSpace(cachedName))
+                {
+                    if (productId == 9999)
+                        return cachedName.Trim();
+                }
+
                 if (Plugin.ProductCache != null && Plugin.ProductCache.TryGetSO(productId, out var so) && so != null)
                 {
                     if (!string.IsNullOrEmpty(so.TempProductName)) return so.TempProductName.Trim();
                     if (!string.IsNullOrEmpty(so.ProductName)) return so.ProductName.Trim();
                 }
+
+                // Fallback również dla ewentualnych przyszłych produktów syntetycznych bez ProductSO.
+                if (Plugin.ProductCache != null &&
+                    Plugin.ProductCache.TryGet(productId, out var fallbackName, out _) &&
+                    !string.IsNullOrWhiteSpace(fallbackName))
+                {
+                    string suffix = $" ID: {productId}";
+                    string value = fallbackName.Trim();
+                    if (value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                        value = value.Substring(0, value.Length - suffix.Length).TrimEnd();
+                    return value;
+                }
             }
             catch { }
 
             return $"Produkt #{productId}";
+        }
 
-        }        
+        // Pass 3e: ID produktu pokazujemy wyłącznie w widoku PRODUKTY.
+        // Część nazw z cache gry już zawiera sufiks "ID: xxx", więc najpierw
+        // normalizujemy nazwę, aby ID nie dublowało się i nie pojawiało w innych widokach.
+        private string FormatTileProductName(string rawName, int productId, bool showId)
+        {
+            string id = productId.ToString();
+            string name = string.IsNullOrWhiteSpace(rawName)
+                ? Plugin.T("Produkt", "Product")
+                : rawName.Trim();
+
+            string[] suffixes =
+            {
+                $" ID: {id}",
+                $" ID:{id}",
+                $" ID : {id}",
+                $" (ID: {id})",
+                $" [ID: {id}]"
+            };
+
+            for (int i = 0; i < suffixes.Length; i++)
+            {
+                string suffix = suffixes[i];
+                if (name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    name = name.Substring(0, name.Length - suffix.Length).TrimEnd();
+                    break;
+                }
+            }
+
+            if (string.Equals(name, $"Produkt #{id}", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, $"Product #{id}", StringComparison.OrdinalIgnoreCase))
+            {
+                name = Plugin.T("Produkt", "Product");
+            }
+
+            return showId ? $"{name} ID: {id}" : name;
+        }
         
         private void CycleSortMode()
         {
@@ -2996,7 +3546,7 @@ namespace StatisticMod
             if (_hubMode == HubMode.Analysis)
             {
                 _filterAvailableLabel.text = $"{_analysisRangeDays} {Plugin.T("DNI", "DAYS")}";
-                if (img != null) img.color = new Color(0.2f, 0.75f, 1f, 0.20f);
+                if (img != null) img.color = StatsAppTheme.Accent;
                 return;
             }
 
@@ -3007,13 +3557,16 @@ namespace StatisticMod
             if (img != null)
             {
                 img.color = _onlyWithPrice
-                    ? new Color(0.2f, 1f, 0.2f, 0.15f)
-                    : new Color(1f, 1f, 1f, 0.12f);
+                    ? StatsAppTheme.Accent
+                    : StatsAppTheme.Button;
             }
         }
 
         private bool IsProductUnlocked(int productId)
         {
+            // Stoisko z lodami jest produktem syntetycznym i nie ma natywnej licencji produktu.
+            if (productId == 9999) return true;
+
             if (ProductLicenseManager.Instance == null) return false;
 
             try

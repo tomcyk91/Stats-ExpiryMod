@@ -1,61 +1,87 @@
 #nullable disable
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace SmartExpiration
 {
     /// <summary>
-    /// PERF: jeden wspoldzielony cache wynikow FindObjectsOfType.
-    /// Wczesniej kilka systemow skanowalo cala scene niezaleznie.
-    /// Teraz sloty i kartony sa skanowane maks. raz na TTL sekund dla wszystkich.
+    /// Shared scene cache. Normal gameplay uses the game's native DisplayManager
+    /// registry. FindObjectsOfType is only a fail-soft fallback when the manager
+    /// is not available yet during very early scene construction.
     /// </summary>
     public static class SceneSlotCache
     {
-        private const float SlotTtl = 10.0f;
-        private const float BoxTtl = 10.0f;
-
         private static DisplaySlot[] _slots = new DisplaySlot[0];
         private static Box[] _boxes = new Box[0];
-
-        private static float _lastSlotScan = -999f;
-        private static float _lastBoxScan = -999f;
+        private static bool _slotsDirty = true;
+        private static bool _boxesDirty = true;
 
         public static DisplaySlot[] GetSlots()
         {
-            float now = Time.time;
-            if (now - _lastSlotScan > SlotTtl || _slots == null || _slots.Length == 0)
-            {
-                _slots = UnityEngine.Object.FindObjectsOfType<DisplaySlot>();
-                _lastSlotScan = now;
-            }
+            if (!_slotsDirty && _slots != null)
+                return _slots;
+
+            _slots = BuildSlotsFromNativeRegistry();
+            _slotsDirty = false;
             return _slots;
+        }
+
+        private static DisplaySlot[] BuildSlotsFromNativeRegistry()
+        {
+            try
+            {
+                if (DisplayManager.HasInstance && DisplayManager.Instance != null)
+                {
+                    var displayed = DisplayManager.Instance.DisplayedProducts;
+                    if (displayed != null)
+                    {
+                        var result = new List<DisplaySlot>();
+                        var seen = new HashSet<int>();
+
+                        foreach (var pair in displayed)
+                        {
+                            var list = pair.Value;
+                            if (list == null) continue;
+
+                            for (int i = 0; i < list.Count; i++)
+                            {
+                                DisplaySlot slot = list[i];
+                                if (slot == null) continue;
+
+                                int id = slot.GetInstanceID();
+                                if (seen.Add(id)) result.Add(slot);
+                            }
+                        }
+
+                        // Empty registry is a valid state for an empty/new shop.
+                        return result.ToArray();
+                    }
+                }
+            }
+            catch { }
+
+            try { return UnityEngine.Object.FindObjectsOfType<DisplaySlot>(); }
+            catch { return new DisplaySlot[0]; }
         }
 
         public static Box[] GetBoxes()
         {
-            float now = Time.time;
-            if (now - _lastBoxScan > BoxTtl || _boxes == null || _boxes.Length == 0)
+            if (_boxesDirty || _boxes == null)
             {
-                _boxes = UnityEngine.Object.FindObjectsOfType<Box>();
-                _lastBoxScan = now;
+                try { _boxes = UnityEngine.Object.FindObjectsOfType<Box>(); }
+                catch { _boxes = new Box[0]; }
+                _boxesDirty = false;
             }
             return _boxes;
         }
 
-        /// <summary>Wymuszenie ponownego skanu przy nastepnym GetSlots/GetBoxes, np. po duzej zmianie sceny.</summary>
         public static void Invalidate()
         {
-            _lastSlotScan = -999f;
-            _lastBoxScan = -999f;
+            _slotsDirty = true;
+            _boxesDirty = true;
         }
 
-        public static void InvalidateSlots()
-        {
-            _lastSlotScan = -999f;
-        }
-
-        public static void InvalidateBoxes()
-        {
-            _lastBoxScan = -999f;
-        }
+        public static void InvalidateSlots() => _slotsDirty = true;
+        public static void InvalidateBoxes() => _boxesDirty = true;
     }
 }

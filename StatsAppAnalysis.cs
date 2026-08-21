@@ -94,7 +94,7 @@ namespace StatisticMod
                 TextMeshProUGUI nameTmp = GetTmpComponent(tile.transform, "Product Name");
                 if (nameTmp != null)
                 {
-                    nameTmp.text = name;
+                    nameTmp.text = FormatTileProductName(name, row.ProductId, false);
                     ConfigureAnalysisTitleText(nameTmp);
                 }
 
@@ -160,17 +160,17 @@ namespace StatisticMod
             {
                 case AnalysisViewMode.Demand:
                     return
-                        $"{Plugin.T("Popyt", "Demand")}: <color=#00BFFF>{requested} {unit}</color>\n" +
-                        $"{Plugin.T("Zebr.", "Picked")}: <color=#90EE90>{picked} {unit}</color> | {Plugin.T("Sprzed.", "Sold")}: <color=#FFD700>{sold} {unit}</color>\n" +
+                        $"{Plugin.T("Popyt", "Demand")}: <color=#297CA6>{requested} {unit}</color>\n" +
+                        $"{Plugin.T("Zebr.", "Picked")}: <color=#308B58>{picked} {unit}</color> | {Plugin.T("Sprzed.", "Sold")}: <color=#C2771A>{sold} {unit}</color>\n" +
                         $"{Plugin.T("Dost.", "Avail.")}: <color={ServiceColor(row.ServiceLevel)}>{row.ServiceLevel * 100f:0.0}%</color> | {Plugin.T("Sprz./popyt", "Sold/dem.")}: {row.SalesToDemandRate * 100f:0.0}%\n" +
-                        $"{Plugin.T("Śr./dzień", "Avg/day")}: <color=#FFD700>{row.AverageDailyDemandVisible:0.00} {unit}</color>";
+                        $"{Plugin.T("Śr./dzień", "Avg/day")}: <color=#C2771A>{row.AverageDailyDemandVisible:0.00} {unit}</color>";
 
                 case AnalysisViewMode.MissedSales:
                     return
-                        $"{Plugin.T("Brak zapasu", "Stock miss")}: <color=#FF8C00>{stockMissed} {unit}</color> | <color=#FF4500>{row.MissedRevenue:0.00} $</color>\n" +
-                        $"{Plugin.T("Brak wszędzie", "Out of stock")}: <color=#FF4D4D>{FormatReason(row.GlobalOutOfStockUnits, row)} {unit}</color>\n" +
-                        $"{Plugin.T("Pusta półka", "Empty shelf")}: <color=#FFA500>{FormatReason(row.ShelfEmptyUnits, row)} {unit}</color> | {Plugin.T("Niewyst.", "Not shown")}: <color=#FFFF66>{FormatReason(row.NotDisplayedUnits, row)} {unit}</color>\n" +
-                        $"{Plugin.T("Inne (bez straty $)", "Other (no lost $)")}: <color=#BBBBBB>{otherMissed} {unit}</color>";
+                        $"{Plugin.T("Brak zapasu", "Stock miss")}: <color=#C2771A>{stockMissed} {unit}</color> | <color=#C2433A>{row.MissedRevenue:0.00} $</color>\n" +
+                        $"{Plugin.T("Brak wszędzie", "Out of stock")}: <color=#C2433A>{FormatReason(row.GlobalOutOfStockUnits, row)} {unit}</color>\n" +
+                        $"{Plugin.T("Pusta półka", "Empty shelf")}: <color=#C2771A>{FormatReason(row.ShelfEmptyUnits, row)} {unit}</color> | {Plugin.T("Niewyst.", "Not shown")}: <color=#9A7B16>{FormatReason(row.NotDisplayedUnits, row)} {unit}</color>\n" +
+                        $"{Plugin.T("Inne (bez straty $)", "Other (no lost $)")}: <color=#718492>{otherMissed} {unit}</color>";
 
                 case AnalysisViewMode.Restock:
                     string shop = FormatVisible(row.ShopStockVisible, row.IsWeight);
@@ -178,15 +178,15 @@ namespace StatisticMod
                     string transfer = FormatReason(row.TransferToShelfUnits, row);
                     string order = FormatReason(row.RecommendedOrderUnits, row);
                     return
-                        $"{Plugin.T("Sklep", "Shop")}: <color=#00FFFF>{shop} {unit}</color> | {Plugin.T("Mag.", "Wh.")}: <color=#FF8C00>{warehouse} {unit}</color>\n" +
+                        $"{Plugin.T("Sklep", "Shop")}: <color=#297CA6>{shop} {unit}</color> | {Plugin.T("Mag.", "Wh.")}: <color=#C2771A>{warehouse} {unit}</color>\n" +
                         $"{Plugin.T("Pokrycie", "Cover")}: <color={CoverColor(row.DaysOfCover)}>{FormatCover(row.DaysOfCover)}</color>\n" +
-                        $"{Plugin.T("Na półkę", "To shelf")}: <color=#90EE90>{transfer} {unit}</color>\n" +
-                        $"{Plugin.T("Zamów", "Order")}: <color=#FFD700>{order} {unit}</color> ({row.RecommendedBoxes} {Plugin.T("kart.", "boxes")})";
+                        $"{Plugin.T("Na półkę", "To shelf")}: <color=#308B58>{transfer} {unit}</color>\n" +
+                        $"{Plugin.T("Zamów", "Order")}: <color=#C2771A>{order} {unit}</color> ({row.RecommendedBoxes} {Plugin.T("kart.", "boxes")})";
 
                 case AnalysisViewMode.Pricing:
                     return
-                        $"{Plugin.T("Koszt", "Cost")}: <color=#FFD700>{row.CurrentCost:0.00} $</color> | {Plugin.T("Cena", "Price")}: <color=#90EE90>{row.CurrentPrice:0.00} $</color>\n" +
-                        $"{Plugin.T("Rynkowa", "Market")}: <color=#00BFFF>{row.MarketPrice:0.00} $</color>\n" +
+                        $"{Plugin.T("Koszt", "Cost")}: <color=#C2771A>{row.CurrentCost:0.00} $</color> | {Plugin.T("Cena", "Price")}: <color=#308B58>{row.CurrentPrice:0.00} $</color>\n" +
+                        $"{Plugin.T("Rynkowa", "Market")}: <color=#297CA6>{row.MarketPrice:0.00} $</color>\n" +
                         $"{Plugin.T("Sugestia", "Suggestion")}: <color={AdviceColor(row.PricingAdvice)}>{row.SuggestedPrice:0.00} $</color>\n" +
                         $"{GetAdviceText(row)} | {Plugin.T("Pewn.", "Conf.")}: {GetConfidenceText(row.PricingConfidence)}";
             }
@@ -199,30 +199,32 @@ namespace StatisticMod
             if (text == null) return;
 
             text.enableAutoSizing = true;
-            text.fontSizeMin = 6.5f;
-            text.fontSizeMax = 13f;
+            text.fontSizeMin = 7.5f;
+            text.fontSizeMax = 11f;
+            text.fontSize = 11f;
+            text.fontStyle = FontStyles.Bold;
             text.enableWordWrapping = false;
             text.overflowMode = TextOverflowModes.Ellipsis;
             text.alignment = TextAlignmentOptions.MidlineLeft;
             text.margin = new Vector4(1f, 0f, 2f, 0f);
+            text.color = StatsAppTheme.TileTitle;
         }
 
         private static void ConfigureAnalysisInfoText(TextMeshProUGUI text)
         {
             if (text == null) return;
 
-            // Jeden najdłuższy wiersz nie może wypchnąć całego opisu poza kafelek.
-            // TMP zmniejsza tekst w granicach 5.6-8.2, a na końcu używa wielokropka.
             text.enableAutoSizing = true;
-            text.fontSizeMin = 5.6f;
-            text.fontSizeMax = 8.2f;
-            text.fontSize = 8.2f;
+            text.fontSizeMin = 5.8f;
+            text.fontSizeMax = 7.8f;
+            text.fontSize = 7.8f;
             text.lineSpacing = -1f;
             text.paragraphSpacing = 0f;
             text.enableWordWrapping = false;
             text.overflowMode = TextOverflowModes.Ellipsis;
             text.alignment = TextAlignmentOptions.TopLeft;
-            text.margin = new Vector4(1f, 0f, 2f, 0f);
+            text.margin = new Vector4(1f, 1f, 2f, 0f);
+            text.color = StatsAppTheme.TileText;
         }
 
         private static void EnsureAnalysisTileClip(GameObject tile)
@@ -257,26 +259,26 @@ namespace StatisticMod
 
         private static string ServiceColor(float service)
         {
-            if (service >= 0.95f) return "#90EE90";
-            if (service >= 0.80f) return "#FFD700";
-            return "#FF6347";
+            if (service >= 0.95f) return StatsAppTheme.PositiveHex;
+            if (service >= 0.80f) return StatsAppTheme.WarningHex;
+            return StatsAppTheme.NegativeHex;
         }
 
         private static string CoverColor(float days)
         {
-            if (days < 1f) return "#FF4500";
-            if (days < 2f) return "#FFD700";
-            return "#90EE90";
+            if (days < 1f) return StatsAppTheme.NegativeHex;
+            if (days < 2f) return StatsAppTheme.WarningHex;
+            return StatsAppTheme.PositiveHex;
         }
 
         private static string AdviceColor(PricingAdviceType advice)
         {
             return advice switch
             {
-                PricingAdviceType.RaiseSlightly => "#90EE90",
-                PricingAdviceType.LowerSlightly => "#FFD700",
-                PricingAdviceType.RestockFirst => "#FF8C00",
-                _ => "#00BFFF"
+                PricingAdviceType.RaiseSlightly => StatsAppTheme.PositiveHex,
+                PricingAdviceType.LowerSlightly => StatsAppTheme.WarningHex,
+                PricingAdviceType.RestockFirst => StatsAppTheme.WarningHex,
+                _ => StatsAppTheme.InfoHex
             };
         }
 
@@ -300,14 +302,20 @@ namespace StatisticMod
 
         private void AdjustAnalysisTile(Transform tile)
         {
+            if (tile == null) return;
+
+            Image background = tile.GetComponent<Image>();
+            if (background != null)
+                background.color = StatsAppTheme.TileBackground;
+
             Transform name = tile.Find("Product Name");
             if (name != null)
             {
                 RectTransform rt = name.GetComponent<RectTransform>();
                 if (rt != null)
                 {
-                    rt.anchorMin = new Vector2(0.255f, 0.735f);
-                    rt.anchorMax = new Vector2(0.985f, 0.965f);
+                    rt.anchorMin = new Vector2(0.325f, 0.71f);
+                    rt.anchorMax = new Vector2(0.965f, 0.94f);
                     rt.offsetMin = Vector2.zero;
                     rt.offsetMax = Vector2.zero;
                 }
@@ -319,8 +327,21 @@ namespace StatisticMod
                 RectTransform rt = info.GetComponent<RectTransform>();
                 if (rt != null)
                 {
-                    rt.anchorMin = new Vector2(0.255f, 0.055f);
-                    rt.anchorMax = new Vector2(0.985f, 0.725f);
+                    rt.anchorMin = new Vector2(0.325f, 0.08f);
+                    rt.anchorMax = new Vector2(0.965f, 0.665f);
+                    rt.offsetMin = Vector2.zero;
+                    rt.offsetMax = Vector2.zero;
+                }
+            }
+
+            Transform icon = tile.Find("Product Icon");
+            if (icon != null)
+            {
+                RectTransform rt = icon.GetComponent<RectTransform>();
+                if (rt != null)
+                {
+                    rt.anchorMin = new Vector2(0.050f, 0.17f);
+                    rt.anchorMax = new Vector2(0.280f, 0.83f);
                     rt.offsetMin = Vector2.zero;
                     rt.offsetMax = Vector2.zero;
                 }
@@ -329,26 +350,27 @@ namespace StatisticMod
 
         private void AddAnalysisAccent(Transform tile, ProductBusinessAnalysisRow row)
         {
+            if (tile == null) return;
+
             var bar = new GameObject("AnalysisAccent");
             bar.transform.SetParent(tile, false);
             RectTransform rt = bar.AddComponent<RectTransform>();
             rt.anchorMin = new Vector2(0f, 0f);
-            rt.anchorMax = new Vector2(1f, 0f);
-            rt.pivot = new Vector2(0.5f, 0f);
-            rt.sizeDelta = new Vector2(0f, 5f);
-            rt.anchoredPosition = Vector2.zero;
+            rt.anchorMax = new Vector2(0.018f, 1f);
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
             bar.AddComponent<CanvasRenderer>();
             Image image = bar.AddComponent<Image>();
             image.raycastTarget = false;
 
             if (_analysisView == AnalysisViewMode.MissedSales && row.StockMissedVisible > 0.0001f)
-                image.color = new Color(1f, 0.25f, 0.15f, 0.85f);
+                image.color = StatsAppTheme.Negative;
             else if (_analysisView == AnalysisViewMode.Restock && (row.RecommendedOrderUnits > 0 || row.TransferToShelfUnits > 0))
-                image.color = new Color(1f, 0.65f, 0.15f, 0.85f);
+                image.color = StatsAppTheme.Warning;
             else if (_analysisView == AnalysisViewMode.Pricing && row.PricingAdvice != PricingAdviceType.Keep)
-                image.color = new Color(0.25f, 0.75f, 1f, 0.85f);
+                image.color = StatsAppTheme.Info;
             else
-                image.color = new Color(0.35f, 0.95f, 0.55f, 0.55f);
+                image.color = StatsAppTheme.Positive;
         }
     }
 }

@@ -1,4 +1,4 @@
-#nullable disable
+﻿#nullable disable
 
 using UnityEngine;
 using System;
@@ -13,7 +13,7 @@ namespace SmartExpiration
     /// Zdarzeniowy system trójkątów ostrzegawczych bez skanowania w trakcie dnia.
     ///
     /// Pełny przebieg półek wykonywany jest wyłącznie:
-    /// 1) po wczytaniu zapisu (plus jeden krótki przebieg poprawkowy po 1 s),
+    /// 1) po zakończeniu jednego budżetowanego przebiegu startowego,
     /// 2) po zmianie numeru dnia,
     /// 3) po ręcznym RequestFullRefresh().
     ///
@@ -45,16 +45,13 @@ namespace SmartExpiration
         private static bool _lastShowTriangles = true;
         private static bool _fullRefreshRequested = false;
 
-        // Jednorazowy drugi przebieg po załadowaniu zapisu. Nie jest to skan cykliczny;
-        // ma tylko złapać półki utworzone chwilę po ustawieniu SaveLoaded=true.
-        private static float _postLoadRescanAt = -1f;
         private static float _nextAnimationTick = 0f;
         private static float _animTime = 0f;
 
         // Maksymalny czas pracy kolejki markerów w jednej klatce.
         // Dzięki temu nawet duży sklep nie powinien dostać jednorazowego hitcha.
-        private const double DirtyQueueBudgetMs = 0.70;
-        private const int MaxDirtySlotsPerFrame = 12;
+        private const double DirtyQueueBudgetMs = 0.25;
+        private const int MaxDirtySlotsPerFrame = 4;
 
         // Animacja nie musi działać 60-120 razy na sekundę.
         private const float AnimationInterval = 0.08f;
@@ -285,14 +282,27 @@ namespace SmartExpiration
                     return;
                 }
 
-                float now = Time.realtimeSinceStartup;
+                // During load the ExpirationLoadFinalizer owns the only full startup pass.
+                // Marker work starts only after that pass, reusing its cached slot snapshot.
+                if (!ExpirationLoadFinalizer.InitialSyncComplete)
+                    return;
+
+                int currentDay = 1;
+                try
+                {
+                    var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
+                    currentDay = dcm != null ? dcm.CurrentDay : 1;
+                }
+                catch { }
 
                 if (!_saveWasLoaded)
                 {
                     _saveWasLoaded = true;
-                    _lastDay = -1;
-                    _fullRefreshRequested = true;
-                    _postLoadRescanAt = now + 1.0f;
+                    _lastDay = currentDay;
+                    _fullRefreshRequested = false;
+
+                    // No invalidation here: reuse the exact snapshot created by startup sync.
+                    RefreshCachedSlots(false);
                 }
 
                 bool showTriangles = PluginConfig.ShowWarningTriangles != null &&
@@ -313,26 +323,9 @@ namespace SmartExpiration
                     _fullRefreshRequested = true;
                 }
 
-                int currentDay = 1;
-                try
-                {
-                    var dcm = DayCycleManager.HasInstance ? DayCycleManager.Instance : null;
-                    currentDay = dcm != null ? dcm.CurrentDay : 1;
-                }
-                catch { }
-
-                // Jedyny automatyczny pełny przebieg w normalnej grze: zmiana dnia.
                 if (currentDay != _lastDay)
                 {
                     _lastDay = currentDay;
-                    _fullRefreshRequested = true;
-                }
-
-                // Jednorazowa poprawka po wczytaniu, gdy część półek powstaje klatkę
-                // lub kilka klatek później. Po wykonaniu timer jest wyłączony.
-                if (_postLoadRescanAt > 0f && now >= _postLoadRescanAt)
-                {
-                    _postLoadRescanAt = -1f;
                     _fullRefreshRequested = true;
                 }
 
@@ -342,7 +335,6 @@ namespace SmartExpiration
                     RefreshCachedSlots(true);
                 }
 
-                // W trakcie dnia kolejka zawiera wyłącznie sloty zgłoszone zdarzeniowo.
                 ProcessDirtyQueue(currentDay);
             }
             finally
@@ -427,11 +419,12 @@ namespace SmartExpiration
         {
             if (state.Anchor != null) return state.Anchor;
 
+            // DisplaySlot exposes its native Label directly. Avoid recursive hierarchy scans
+            // during startup when hundreds of slots are initialized.
             try
             {
-                Label label = slot.GetComponentInChildren<Label>(true);
-                if (label != null)
-                    state.Anchor = label.transform;
+                Label label = slot != null ? slot.Label : null;
+                if (label != null) state.Anchor = label.transform;
             }
             catch { }
 
@@ -467,33 +460,9 @@ namespace SmartExpiration
                     return;
                 }
 
-                bool isCritical = false;
-                var expirationComponents =
-                    slot.GetComponentsInChildren<ProductExpirationComponent>(true);
-
-                // Jednorazowy fallback: jeżeli slot ma produkty, ale nie ma jeszcze
-                // żadnego komponentu terminu, zsynchronizuj go. W normalnej pracy
-                // nie wywołujemy już SyncShelf przy każdym sprawdzeniu.
-                if ((expirationComponents == null || expirationComponents.Count == 0) &&
-                    ExpirationSaveManager.SaveLoaded)
-                {
-                    ExpirationManager.SyncShelf(slot);
-                    expirationComponents =
-                        slot.GetComponentsInChildren<ProductExpirationComponent>(true);
-                }
-
-                if (expirationComponents != null)
-                {
-                    for (int i = 0; i < expirationComponents.Count; i++)
-                    {
-                        ProductExpirationComponent comp = expirationComponents[i];
-                        if (comp != null && comp.ExpirationDay - currentDay <= 0)
-                        {
-                            isCritical = true;
-                            break;
-                        }
-                    }
-                }
+                // PERF: no recursive GetComponentsInChildren allocation here. The native
+                // DisplaySlot.m_Products list is authoritative and can be checked directly.
+                bool isCritical = ExpirationManager.HasExpiredProduct(slot, currentDay);
 
                 if (isCritical)
                 {
@@ -555,7 +524,6 @@ namespace SmartExpiration
             _cachedSlots = new DisplaySlot[0];
             _lastDay = -1;
             _fullRefreshRequested = false;
-            _postLoadRescanAt = -1f;
         }
 
         public static void AnimateMarkers()
@@ -635,7 +603,8 @@ namespace SmartExpiration
                 LabelExclamationOverlay.RefreshAll();
                 LabelExclamationOverlay.AnimateMarkers();
 
-                SmartExpiration.Patches.RestockerScanner.Process();
+                // Event patches on DisplaySlot.AddProduct/TakeProductFromDisplay already
+                // keep expiration state current. No 1.5-second shelf safety scan here.
             }
             catch { }
             finally

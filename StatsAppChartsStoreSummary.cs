@@ -153,14 +153,69 @@ namespace StatisticMod
 
             try
             {
-                if (_chartProductPickerRoot != null && _chartProductPickerRoot.transform.parent != null)
+                Transform row = _chartProductPickerRoot != null
+                    ? _chartProductPickerRoot.transform.parent
+                    : null;
+
+                if (row != null)
                 {
-                    var rowRt = _chartProductPickerRoot.transform.parent.GetComponent<RectTransform>();
+                    var h = row.GetComponent<HorizontalLayoutGroup>();
+                    if (h != null)
+                    {
+                        h.spacing = 8f;
+                        h.childControlWidth = true;
+                        h.childControlHeight = true;
+                        // Szerokości są sterowane LayoutElementami poniżej.
+                        h.childForceExpandWidth = false;
+                        h.childForceExpandHeight = true;
+                    }
+
+                    Transform scopeRoot = row.Find("Left_Scope");
+                    Transform categoryRoot = row.Find("Right_Category");
+
+                    if (_chartScope == ChartScope.Store)
+                    {
+                        // SKLEP: dwa przyciski mają zająć CAŁĄ szerokość, dokładnie 50/50.
+                        SetChartScopeElementWidth(scopeRoot, 0f, 0f, 1f);
+                        SetChartScopeElementWidth(categoryRoot, 0f, 0f, 1f);
+                    }
+                    else
+                    {
+                        // PRODUKT: trzy pola. Środkowy produkt dostaje całą pozostałą przestrzeń.
+                        SetChartScopeElementWidth(scopeRoot, 118f, 132f, 0f);
+                        SetChartScopeElementWidth(_chartProductPickerRoot != null ? _chartProductPickerRoot.transform : null,
+                            260f, 340f, 1f);
+                        SetChartScopeElementWidth(categoryRoot, 190f, 235f, 0f);
+                    }
+
+                    var rowRt = row.GetComponent<RectTransform>();
                     if (rowRt != null)
+                    {
                         LayoutRebuilder.ForceRebuildLayoutImmediate(rowRt);
+                        Canvas.ForceUpdateCanvases();
+                        LayoutRebuilder.ForceRebuildLayoutImmediate(rowRt);
+                    }
                 }
             }
             catch { }
+        }
+
+        private static void SetChartScopeElementWidth(
+            Transform target,
+            float minWidth,
+            float preferredWidth,
+            float flexibleWidth)
+        {
+            if (target == null) return;
+
+            var le = target.GetComponent<LayoutElement>();
+            if (le == null)
+                le = target.gameObject.AddComponent<LayoutElement>();
+
+            le.ignoreLayout = false;
+            le.minWidth = minWidth;
+            le.preferredWidth = preferredWidth;
+            le.flexibleWidth = flexibleWidth;
         }
 
         private void UpdateChartScopeLabel()
@@ -302,13 +357,13 @@ namespace StatisticMod
             if (!hasNegative)
             {
                 float maxValue = Mathf.Max(0.1f, maxPositive);
-                float usableHeight = Mathf.Max(30f, (height - 38f) * 0.70f);
+                float usableHeight = Mathf.Max(30f, (height - 52f) * 0.70f);
 
                 for (int i = 0; i < days.Count; i++)
                 {
                     float xCenter = (i + 0.5f) * groupWidth;
                     string label = FormatSummaryMetricValue(_summaryMetric, values[i]);
-                    DrawBar(xCenter, 22f, barWidth, usableHeight, values[i], maxValue, positiveColor, label);
+                    DrawBar(xCenter, 28f, barWidth, usableHeight, values[i], maxValue, positiveColor, label);
                     DrawDayLabel(xCenter, days[i], groupWidth);
                 }
             }
@@ -340,8 +395,8 @@ namespace StatisticMod
             Color positiveColor,
             Color negativeColor)
         {
-            float bottom = 22f;
-            float usableHeight = Mathf.Max(70f, chartHeight - 55f);
+            float bottom = 28f;
+            float usableHeight = Mathf.Max(70f, chartHeight - 68f);
             float safePositive = Mathf.Max(0.1f, maxPositive);
             float safeNegative = Mathf.Max(0.1f, maxNegativeAbs);
             float totalScale = safePositive + safeNegative;

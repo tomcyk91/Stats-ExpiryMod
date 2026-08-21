@@ -1,4 +1,4 @@
-using TMPro;
+﻿using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
@@ -85,7 +85,7 @@ namespace StatisticMod
             arrow.alignment = TextAlignmentOptions.Center;
             arrow.fontSize = 9f;
             arrow.fontStyle = FontStyles.Bold;
-            arrow.color = new Color32(255, 245, 220, 255);
+            arrow.color = StatsAppTheme.TextLight;
             arrow.raycastTarget = false;
             if (_gameFont != null) arrow.font = _gameFont;
             SafeSetOutline(arrow, 0.12f);
@@ -242,11 +242,11 @@ namespace StatisticMod
             group.blocksRaycasts = true;
 
             Image panelImage = _headerDropdownRoot.AddComponent<Image>();
-            panelImage.color = new Color(0.02f, 0.12f, 0.26f, 0.985f);
+            panelImage.color = StatsAppTheme.DropdownBackground;
             panelImage.raycastTarget = true;
 
             Outline outline = _headerDropdownRoot.AddComponent<Outline>();
-            outline.effectColor = new Color(1f, 1f, 1f, 0.32f);
+            outline.effectColor = StatsAppTheme.HeaderBorder;
             outline.effectDistance = new Vector2(1f, -1f);
 
             VerticalLayoutGroup layout = _headerDropdownRoot.AddComponent<VerticalLayoutGroup>();
@@ -298,17 +298,17 @@ namespace StatisticMod
 
             var image = optionGO.AddComponent<Image>();
             image.color = selected
-                ? new Color(0f, 0.58f, 0.92f, 0.92f)
-                : new Color(1f, 1f, 1f, 0.08f);
+                ? StatsAppTheme.DropdownSelected
+                : StatsAppTheme.DropdownItem;
 
             var button = optionGO.AddComponent<Button>();
             button.transition = Selectable.Transition.ColorTint;
             ColorBlock colors = button.colors;
             colors.normalColor = image.color;
             colors.highlightedColor = selected
-                ? new Color(0.05f, 0.68f, 1f, 1f)
-                : new Color(0.15f, 0.45f, 0.72f, 0.92f);
-            colors.pressedColor = new Color(0.08f, 0.32f, 0.58f, 1f);
+                ? StatsAppTheme.AccentHover
+                : StatsAppTheme.ButtonHover;
+            colors.pressedColor = StatsAppTheme.ButtonPressed;
             colors.selectedColor = colors.highlightedColor;
             button.colors = colors;
 
@@ -333,7 +333,7 @@ namespace StatisticMod
             text.alignment = TextAlignmentOptions.MidlineLeft;
             text.fontSize = 12f;
             text.fontStyle = selected ? FontStyles.Bold : FontStyles.Normal;
-            text.color = new Color32(255, 245, 220, 255);
+            text.color = StatsAppTheme.TextLight;
             text.enableAutoSizing = true;
             text.fontSizeMin = 9f;
             text.fontSizeMax = 12f;
