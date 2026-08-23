@@ -19,7 +19,7 @@ namespace SmartExpiration
     {
         private const int InvalidLegacyBoxUid = 807810400;
 
-        private static string CurrentSlotName
+        public static string CurrentSlotName
         {
             get
             {
@@ -82,6 +82,10 @@ namespace SmartExpiration
 
         public static bool SaveDataInitialized = false;
         public static bool SaveLoaded = false;
+
+        // Używane przez jednorazowe migracje bezpieczeństwa.
+        // Marker migracji powstaje dopiero po udanym zapisie sidecara.
+        public static bool LastSaveSucceeded { get; private set; } = false;
 
         // A2 FIX: Ręczna iteracja natywnej tablicy IL2CPP całkowicie omija systemowe LINQ (.ToList).
         public static List<global::Product> GetSortedProducts(Transform parent)
@@ -315,6 +319,8 @@ namespace SmartExpiration
 
         public static void SaveData()
         {
+            LastSaveSucceeded = false;
+
             StatisticMod.Plugin.DebugLog(
                 $"[SaveData] START -> {NewSaveFilePath}");
 
@@ -461,12 +467,32 @@ namespace SmartExpiration
                     int deliveryDay =
                         GetCurrentDay();
 
-                    if (runtimeBoxDeliveryDays.TryGetValue(
-                            runtimeKey,
-                            out int runtimeDeliveryDay) &&
-                        runtimeDeliveryDay > 0)
+                    bool restoredFromSave =
+                        runtimeBoxDatesFromSave
+                            .TryGetValue(
+                                runtimeKey,
+                                out bool fromSaveFlag) &&
+                        fromSaveFlag;
+
+                    // Dla kartonu odtworzonego z PBOX2 trwały UID jest
+                    // autorytatywnym źródłem dnia dostawy.
+                    if (restoredFromSave &&
+                        stableUid > 0 &&
+                        boxDeliveryDays.TryGetValue(
+                            stableUid,
+                            out int savedStableDeliveryDay) &&
+                        savedStableDeliveryDay > 0)
                     {
-                        deliveryDay = runtimeDeliveryDay;
+                        deliveryDay =
+                            savedStableDeliveryDay;
+                    }
+                    else if (runtimeBoxDeliveryDays.TryGetValue(
+                                 runtimeKey,
+                                 out int runtimeDeliveryDay) &&
+                             runtimeDeliveryDay > 0)
+                    {
+                        deliveryDay =
+                            runtimeDeliveryDay;
                     }
                     else if (stableUid > 0 &&
                              boxDeliveryDays.TryGetValue(
@@ -474,14 +500,16 @@ namespace SmartExpiration
                                  out int stableDeliveryDay) &&
                              stableDeliveryDay > 0)
                     {
-                        deliveryDay = stableDeliveryDay;
+                        deliveryDay =
+                            stableDeliveryDay;
                     }
                     else if (boxDeliveryDays.TryGetValue(
                                  runtimeKey,
                                  out int oldRuntimeDeliveryDay) &&
                              oldRuntimeDeliveryDay > 0)
                     {
-                        deliveryDay = oldRuntimeDeliveryDay;
+                        deliveryDay =
+                            oldRuntimeDeliveryDay;
                     }
 
                     if (deliveryDay < 1)
@@ -553,6 +581,45 @@ namespace SmartExpiration
             }
 
             // ============================================================
+            // OCHRONA JESZCZE NIEZAINICJALIZOWANYCH PBOX2
+            //
+            // Jednorazowa migracja bezpieczeństwa wykonuje własny zapis
+            // zaraz po wczytaniu gry. Jeżeli jakiś karton nie został jeszcze
+            // zainicjalizowany jako obiekt runtime, nie wolno zgubić jego PBOX2.
+            // ============================================================
+
+            int preservedPendingPbox2 = 0;
+
+            foreach (var kvp in pendingLoadedBoxesByUid)
+            {
+                int uid = kvp.Key;
+                SavedBoxData pending = kvp.Value;
+
+                if (uid <= 0 ||
+                    usedStableUids.Contains(uid) ||
+                    pending == null ||
+                    pending.Dates == null ||
+                    pending.Dates.Count == 0 ||
+                    pending.ProductId <= 0)
+                {
+                    continue;
+                }
+
+                int deliveryDay =
+                    pending.DeliveryDay > 0
+                        ? pending.DeliveryDay
+                        : 1;
+
+                linesToSave.Add(
+                    $"PBOX2|{uid}|{pending.ProductId}|" +
+                    $"{string.Join(",", pending.Dates)}|" +
+                    $"{deliveryDay}");
+
+                usedStableUids.Add(uid);
+                preservedPendingPbox2++;
+            }
+
+            // ============================================================
             // OCHRONA MIGRACJI STAREGO PBOX
             //
             // Etykiety dalekich kartonów mogą nie zostać jeszcze
@@ -612,10 +679,13 @@ namespace SmartExpiration
                     NewSaveFilePath,
                     linesToSave);
 
+                LastSaveSucceeded = true;
+
                 StatisticMod.Plugin.DebugLog(
                     $"[SaveData] DONE. " +
                     $"Shelves={savedSlotsCount}, " +
                     $"PBOX2={savedBoxesCount}, " +
+                    $"PreservedPendingPBOX2={preservedPendingPbox2}, " +
                     $"LegacyFallbackBoxes={legacyFallbackBoxesCount}, " +
                     $"PreservedLegacyPBOX={preservedLegacyRecords}, " +
                     $"SkippedBoxes={skippedBoxesCount}, " +
@@ -630,6 +700,8 @@ namespace SmartExpiration
             }
             catch (Exception ex)
             {
+                LastSaveSucceeded = false;
+
                 StatisticMod.Plugin.Log.LogError(
                     $"[SaveData] BŁĄD ZAPISU: {ex}");
             }

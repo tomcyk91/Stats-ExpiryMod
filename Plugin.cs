@@ -11,7 +11,7 @@ using SmartExpiration.Patches;
 
 namespace StatisticMod
 {
-    [BepInPlugin("StatsandExpiryMod", "Stats & Expiration Mod", "2.4.3")]
+    [BepInPlugin("StatsandExpiryMod", "Stats & Expiration Mod", "2.4.4")]
     public class Plugin : BasePlugin
     {
         // Zachowane dla kompatybilności z wcześniejszym kodem moda.

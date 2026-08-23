@@ -4,9 +4,9 @@
     <TargetFramework>net6.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
-    <Version>2.4.3</Version>
-    <AssemblyVersion>2.4.3</AssemblyVersion>
-    <FileVersion>2.4.3</FileVersion>
+    <Version>2.4.4</Version>
+    <AssemblyVersion>2.4.4</AssemblyVersion>
+    <FileVersion>2.4.4</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -97,5 +97,9 @@
     <RefsRoot>$(MSBuildProjectDirectory)\..\..\References\BepInEx</RefsRoot>
     <GameRoot>$(MSBuildProjectDirectory)\..\..\Game</GameRoot>
   </PropertyGroup>
+
+	<Target Name="ForceClean" BeforeTargets="CoreCompile">
+		<CallTarget Targets="Clean" />
+	</Target>
 
 </Project>

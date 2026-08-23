@@ -1,0 +1,14 @@
+--- ExpirationLoadFinalizer_before.cs
++++ ExpirationLoadFinalizer_ExpiryRescue.cs
+@@ -109,6 +109,11 @@
+                     }
+                 }
+ 
++                // Jednorazowa migracja bezpieczeństwa po pełnym odtworzeniu
++                // terminów półek. Używa tego samego snapshotu slotów i nie
++                // wykonuje dodatkowego globalnego skanu półek.
++                yield return ExpirationSafetyMigration.RunOnceCoroutine(allSlots);
++
+                 // Reuse exactly this native-cache snapshot for marker initialization.
+                 // No second scene search after startup synchronization.
+                 InitialSyncComplete = true;

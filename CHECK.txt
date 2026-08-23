@@ -1,0 +1,9 @@
+ExpirationSaveManager braces: 0
+ExpirationLoadFinalizer braces: 0
+ExpirationSafetyMigration braces: 0
+one-time marker exists: True
+condition is expiration <= current day: True
+rescue is current day + 1: True
+marker after SaveData success: True
+finalizer invokes migration: True
+pending PBOX2 preserved: True

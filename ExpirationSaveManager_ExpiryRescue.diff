@@ -1,0 +1,100 @@
+--- ExpirationSaveManager_before.cs
++++ ExpirationSaveManager_ExpiryRescue.cs
+@@ -19,7 +19,7 @@
+     {
+         private const int InvalidLegacyBoxUid = 807810400;
+ 
+-        private static string CurrentSlotName
++        public static string CurrentSlotName
+         {
+             get
+             {
+@@ -82,6 +82,10 @@
+ 
+         public static bool SaveDataInitialized = false;
+         public static bool SaveLoaded = false;
++
++        // Używane przez jednorazowe migracje bezpieczeństwa.
++        // Marker migracji powstaje dopiero po udanym zapisie sidecara.
++        public static bool LastSaveSucceeded { get; private set; } = false;
+ 
+         // A2 FIX: Ręczna iteracja natywnej tablicy IL2CPP całkowicie omija systemowe LINQ (.ToList).
+         public static List<global::Product> GetSortedProducts(Transform parent)
+@@ -315,6 +319,8 @@
+ 
+         public static void SaveData()
+         {
++            LastSaveSucceeded = false;
++
+             StatisticMod.Plugin.DebugLog(
+                 $"[SaveData] START -> {NewSaveFilePath}");
+ 
+@@ -575,6 +581,45 @@
+             }
+ 
+             // ============================================================
++            // OCHRONA JESZCZE NIEZAINICJALIZOWANYCH PBOX2
++            //
++            // Jednorazowa migracja bezpieczeństwa wykonuje własny zapis
++            // zaraz po wczytaniu gry. Jeżeli jakiś karton nie został jeszcze
++            // zainicjalizowany jako obiekt runtime, nie wolno zgubić jego PBOX2.
++            // ============================================================
++
++            int preservedPendingPbox2 = 0;
++
++            foreach (var kvp in pendingLoadedBoxesByUid)
++            {
++                int uid = kvp.Key;
++                SavedBoxData pending = kvp.Value;
++
++                if (uid <= 0 ||
++                    usedStableUids.Contains(uid) ||
++                    pending == null ||
++                    pending.Dates == null ||
++                    pending.Dates.Count == 0 ||
++                    pending.ProductId <= 0)
++                {
++                    continue;
++                }
++
++                int deliveryDay =
++                    pending.DeliveryDay > 0
++                        ? pending.DeliveryDay
++                        : 1;
++
++                linesToSave.Add(
++                    $"PBOX2|{uid}|{pending.ProductId}|" +
++                    $"{string.Join(",", pending.Dates)}|" +
++                    $"{deliveryDay}");
++
++                usedStableUids.Add(uid);
++                preservedPendingPbox2++;
++            }
++
++            // ============================================================
+             // OCHRONA MIGRACJI STAREGO PBOX
+             //
+             // Etykiety dalekich kartonów mogą nie zostać jeszcze
+@@ -634,10 +679,13 @@
+                     NewSaveFilePath,
+                     linesToSave);
+ 
++                LastSaveSucceeded = true;
++
+                 StatisticMod.Plugin.DebugLog(
+                     $"[SaveData] DONE. " +
+                     $"Shelves={savedSlotsCount}, " +
+                     $"PBOX2={savedBoxesCount}, " +
++                    $"PreservedPendingPBOX2={preservedPendingPbox2}, " +
+                     $"LegacyFallbackBoxes={legacyFallbackBoxesCount}, " +
+                     $"PreservedLegacyPBOX={preservedLegacyRecords}, " +
+                     $"SkippedBoxes={skippedBoxesCount}, " +
+@@ -652,6 +700,8 @@
+             }
+             catch (Exception ex)
+             {
++                LastSaveSucceeded = false;
++
+                 StatisticMod.Plugin.Log.LogError(
+                     $"[SaveData] BŁĄD ZAPISU: {ex}");
+             }

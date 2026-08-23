@@ -233,6 +233,27 @@ namespace SmartExpiration.Patches
             if (BoxKey <= 0)
                 BoxKey = _box.GetInstanceID();
 
+            // LoadData może zakończyć się dopiero po wcześniejszym utworzeniu
+            // runtime przez grę. Jeśli właśnie pojawił się PBOX2, stosujemy go
+            // również do już zainicjalizowanej etykiety.
+            if (_isInitialized)
+            {
+                bool fromSave =
+                    ExpirationSaveManager
+                        .runtimeBoxDatesFromSave
+                        .TryGetValue(
+                            BoxKey,
+                            out bool savedFlag) &&
+                    savedFlag;
+
+                if (!fromSave)
+                {
+                    TryApplyPendingPbox2(
+                        BoxKey,
+                        productId);
+                }
+            }
+
             if (!_isInitialized)
             {
                 InitializeDatesFromSave(
@@ -360,28 +381,18 @@ namespace SmartExpiration.Patches
                         deliveryDay +
                         trueShelfLife;
 
-                    int expDayToUse =
-                        standardExpDay;
-
-                    if (BoxLabelPatch.ClipboardDate != -1)
-                    {
-                        if (Time.frameCount -
-                            BoxLabelPatch.ClipboardFrame <= 15)
-                        {
-                            expDayToUse =
-                                BoxLabelPatch.ClipboardDate;
-                        }
-
-                        BoxLabelPatch.ClipboardDate = -1;
-                    }
-
+                    // Brak globalnego ClipboardDate.
+                    //
+                    // Dokładne daty produktów przenoszonych do kartonu są
+                    // dopisywane bezpośrednio przez BoxPatches.AddProduct.
+                    // Jeśli tutaj nadal brakuje pozycji, oznacza to świeżo
+                    // utworzony produkt i dostaje on zawsze deterministiczny
+                    // termin deliveryDay + shelfLife.
                     while (dates.Count <
                            _box.ProductCount)
                     {
-                        dates.Add(expDayToUse);
-
-                        expDayToUse =
-                            standardExpDay;
+                        dates.Add(
+                            standardExpDay);
                     }
                 }
                 else if (dates.Count >
@@ -464,19 +475,16 @@ namespace SmartExpiration.Patches
         {
             try
             {
-                if (ExpirationSaveManager
-                        .runtimeBoxDates
-                        .ContainsKey(boxKey))
-                {
-                    return;
-                }
-
                 int stableUid =
                     ExpirationSaveManager
                         .GetStableBoxUid(_box);
 
                 // ======================================================
-                // 1. PBOX2 - dokładne dopasowanie po trwałym UID.
+                // 1. PBOX2 ma ZAWSZE pierwszeństwo przed runtime.
+                //
+                // Podczas ładowania gry Box.AddProduct może utworzyć runtime
+                // wcześniej niż ten komponent. Stary kod robił wtedy return
+                // i gubił zapisany DeliveryDay.
                 // ======================================================
                 if (stableUid > 0 &&
                     ExpirationSaveManager
@@ -528,6 +536,15 @@ namespace SmartExpiration.Patches
                     ExpirationSaveManager
                         .boxDeliveryDays
                         .Remove(stableUid);
+                }
+
+                // Jeśli nie ma dokładnego PBOX2, dopiero teraz uznajemy
+                // istniejący runtime za źródło prawdy.
+                if (ExpirationSaveManager
+                        .runtimeBoxDates
+                        .ContainsKey(boxKey))
+                {
+                    return;
                 }
 
                 // ======================================================
@@ -632,6 +649,64 @@ namespace SmartExpiration.Patches
                 InitializeFreshBoxState(
                     boxKey,
                     stableUid);
+            }
+        }
+
+        private bool TryApplyPendingPbox2(
+            int boxKey,
+            int productId)
+        {
+            try
+            {
+                int stableUid =
+                    ExpirationSaveManager
+                        .GetStableBoxUid(_box);
+
+                if (stableUid <= 0)
+                    return false;
+
+                if (!ExpirationSaveManager
+                        .pendingLoadedBoxesByUid
+                        .TryGetValue(
+                            stableUid,
+                            out SavedBoxData saved) ||
+                    saved == null ||
+                    saved.Dates == null ||
+                    saved.Dates.Count == 0)
+                {
+                    return false;
+                }
+
+                if (saved.ProductId > 0 &&
+                    saved.ProductId != productId)
+                {
+                    return false;
+                }
+
+                ApplySavedBoxData(
+                    boxKey,
+                    stableUid,
+                    saved);
+
+                ExpirationSaveManager
+                    .pendingLoadedBoxesByUid
+                    .Remove(stableUid);
+
+                StatisticMod.Plugin.DebugLog(
+                    $"[BoxExpiration] Late/exact PBOX2 restored. " +
+                    $"uid={stableUid}, productId={productId}, " +
+                    $"deliveryDay={saved.DeliveryDay}, " +
+                    $"dates={saved.Dates.Count}");
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                StatisticMod.Plugin.DebugWarning(
+                    $"[BoxExpiration] TryApplyPendingPbox2 error: " +
+                    $"{ex.Message}");
+
+                return false;
             }
         }
 
@@ -882,9 +957,45 @@ namespace SmartExpiration.Patches
                         "szt.",
                         "pcs.");
 
+                string expiryDisplay;
+
+                if (daysLeft < 0)
+                {
+                    int overdueDays = -daysLeft;
+
+                    expiryDisplay =
+                        StatisticMod.Plugin.T(
+                            $"przeterminowany {overdueDays} d.",
+                            $"expired {overdueDays} d.");
+                }
+                else if (daysLeft == 0)
+                {
+                    expiryDisplay =
+                        StatisticMod.Plugin.T(
+                            "dzisiaj",
+                            "today");
+                }
+                else if (daysLeft == 1)
+                {
+                    expiryDisplay =
+                        StatisticMod.Plugin.T(
+                            "1 dzień",
+                            "1 day");
+                }
+                else
+                {
+                    expiryDisplay =
+                        StatisticMod.Plugin.T(
+                            $"{daysLeft} dni",
+                            $"{daysLeft} days");
+                }
+
+                // PBOX2/runtimeBoxDates przechowuje ABSOLUTNY ExpirationDay.
+                // Etykieta kartonu pokazuje natomiast pozostały czas,
+                // tak samo jak panel terminów na półce.
                 _textMesh.text =
                     $"<color=#C0C0C0>{textDostawa} {deliveryDay}</color> | " +
-                    $"<color={color}>{textTermin} {expDay}</color>\n" +
+                    $"<color={color}>{textTermin} {expiryDisplay}</color>\n" +
                     $"<size=80%><color=#C0C0C0>" +
                     $"{textZapas} {_box.ProductCount} {textSzt}" +
                     $"</color></size>";

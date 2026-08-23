@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Diagnostics;
 using UnityEngine;
@@ -108,6 +108,11 @@ namespace SmartExpiration
                         frameStart = Stopwatch.GetTimestamp();
                     }
                 }
+
+                // Jednorazowa migracja bezpieczeństwa po pełnym odtworzeniu
+                // terminów półek. Używa tego samego snapshotu slotów i nie
+                // wykonuje dodatkowego globalnego skanu półek.
+                yield return ExpirationSafetyMigration.RunOnceCoroutine(allSlots);
 
                 // Reuse exactly this native-cache snapshot for marker initialization.
                 // No second scene search after startup synchronization.
