@@ -1,0 +1,28 @@
+NEXUS UPDATE NOTES
+
+Important:
+This update introduces PBOX3, a new persistence system for products stored in boxes.
+
+Why:
+The game's Box UID can change after restarting the game, so it cannot reliably identify the same physical box between sessions. Earlier versions could therefore restore box expiration data to the wrong box.
+
+What changes:
+- Delivery day and expiration day now belong to each individual product.
+- A newly spawned empty box has no delivery history of its own.
+- If a product delivered on day 1 is moved into a new box on day 5, it remains a day-1 product.
+- Mixed delivery batches inside one box are supported.
+- Box persistence no longer depends on the game's changing UID.
+
+Save migration:
+Existing PBOX2/PBOX data is migrated automatically on first load.
+Before the first PBOX3 migration write, the mod creates:
+SmartExpiration.pre_PBOX3.bak
+
+Recommended:
+Keep the backup until you have loaded, saved, restarted the game, and confirmed that expiration dates are correct.
+
+Compatibility:
+Designed to behave correctly with workflows where other mods create or refill boxes.
+
+Version:
+Set the final mod version in Plugin.cs before compiling/uploading.

@@ -18,6 +18,11 @@ namespace SmartExpiration
     /// </summary>
     public static class ExpirationSafetyMigration
     {
+        // Set only when this run rewrote/reloaded SmartExpiration.txt.
+        // ExpirationLoadFinalizer uses it to re-apply the freshly reloaded
+        // PBOX3/SDEL data to physical scene objects before enabling saves.
+        public static bool ReloadedSidecarThisRun { get; private set; }
+
         private const string MigrationId = "ExpiryRescueV3";
 
         private const string MarkerFileName =
@@ -32,6 +37,8 @@ namespace SmartExpiration
         public static IEnumerator RunOnceCoroutine(
             DisplaySlot[] ignoredSceneSnapshot)
         {
+            ReloadedSidecarThisRun = false;
+
             string slotName =
                 GetCurrentSlotName();
 
@@ -71,8 +78,6 @@ namespace SmartExpiration
 
             if (File.Exists(markerPath))
             {
-                StatisticMod.Plugin.DebugLog(
-                    $"[ExpiryRescueV3] Already completed for slot {slotName}. Skipping.");
 
                 yield break;
             }
@@ -110,9 +115,6 @@ namespace SmartExpiration
                         0,
                         "No SmartExpiration.txt existed.");
 
-                    StatisticMod.Plugin.Log.LogInfo(
-                        $"[ExpiryRescueV3] No SmartExpiration.txt for slot={slotName}. " +
-                        "Nothing to rescue. Migration marked as completed.");
                 }
                 catch (Exception ex)
                 {
@@ -123,10 +125,6 @@ namespace SmartExpiration
                 yield break;
             }
 
-            StatisticMod.Plugin.Log.LogInfo(
-                $"[ExpiryRescueV3] Safe file migration started. " +
-                $"Slot={slotName}, CurrentDay={currentDay}, " +
-                $"RescueDay={rescueExpirationDay}");
 
             string[] originalLines;
 
@@ -180,6 +178,13 @@ namespace SmartExpiration
                         // DisplaySlotPath|date,date,date
                         datesPartIndex = 1;
                         isShelf = true;
+                    }
+                    else if (parts[0] == "PBOX3" &&
+                             parts.Length >= 13)
+                    {
+                        // PBOX3|guid|boxId|productId|px|py|pz|qx|qy|qz|qw|dates|deliveryDays
+                        datesPartIndex = 11;
+                        isBox = true;
                     }
                     else if (parts[0] == "PBOX2" &&
                              parts.Length >= 5)
@@ -334,6 +339,8 @@ namespace SmartExpiration
 
                     yield break;
                 }
+
+                ReloadedSidecarThisRun = true;
             }
             catch (Exception ex)
             {

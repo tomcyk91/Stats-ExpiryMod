@@ -23,240 +23,142 @@ namespace SmartExpiration.Patches
         {
             try
             {
-                if (__instance == null || item == null)
+                if (__instance == null ||
+                    item == null)
+                {
                     return;
+                }
 
-                int boxKey = __instance.GetInstanceID();
+                int runtimeKey =
+                    __instance.GetInstanceID();
 
                 int currentCount = 0;
+
                 try
                 {
-                    currentCount = __instance.ProductCount;
+                    currentCount =
+                        __instance.ProductCount;
                 }
                 catch { }
 
                 if (currentCount < 0)
                     currentCount = 0;
 
-                int productId = productID;
+                int productId =
+                    productID;
 
                 if (productId <= 0)
                 {
-                    try
-                    {
-                        productId =
-                            ExpirationSaveManager.GetProductIdFromProduct(item);
-                    }
-                    catch
-                    {
-                        productId = -1;
-                    }
+                    productId =
+                        ExpirationSaveManager
+                            .GetProductIdFromProduct(item);
                 }
 
-                if (productId <= 0 &&
-                    __instance.Data != null)
+                if (productId <= 0)
                 {
-                    try
-                    {
-                        productId = __instance.Data.ProductID;
-                    }
-                    catch
-                    {
-                        productId = -1;
-                    }
+                    productId =
+                        ExpirationSaveManager
+                            .GetBoxProductId(__instance);
                 }
 
-                int stableUid =
-                    ExpirationSaveManager.GetStableBoxUid(__instance);
+                if (productId <= 0)
+                    return;
 
-                int dateToStore = -1;
-                bool restoredFromSave = false;
+                // PBOX3 can hydrate an existing box before the native AddProduct
+                // increments ProductCount. This is used both during startup load
+                // and when another mod rebuilds a Box with a new InstanceID.
+                bool hydratedKnownState =
+                    ExpirationSaveManager
+                        .TryHydrateRuntimeFromKnownState(
+                            __instance,
+                            productId,
+                            currentCount);
 
-                // ======================================================
-                // 1. Produkt już ma własny termin.
-                // Normalny transfer shelf -> box.
-                // ======================================================
+                int expirationDay = -1;
+                int deliveryDay = -1;
+
                 var comp =
                     item.GetComponent<ProductExpirationComponent>();
 
-                if (comp != null)
-                {
-                    dateToStore = comp.ExpirationDay;
-
-                    ExpirationSaveManager
-                        .runtimeBoxConfigVersion[boxKey] = -1;
-
-                    StatisticMod.Plugin.DebugLog(
-                        $"[BoxPatches] Preserved exact product date " +
-                        $"{dateToStore} while adding product {productId} " +
-                        $"to box {boxKey}");
-                }
-
-                // ======================================================
-                // 2. Wczytywanie istniejącego kartonu z PBOX2.
-                //
-                // Box.AddProduct może zostać wywołany podczas rekonstrukcji
-                // kartonów ZANIM BoxExpirationLabel.Start/Update zdąży
-                // zastosować zapis. Dlatego PBOX2 obsługujemy już tutaj.
-                // ======================================================
-                if (dateToStore < 0 &&
-                    stableUid > 0 &&
-                    ExpirationSaveManager
-                        .pendingLoadedBoxesByUid
-                        .TryGetValue(
-                            stableUid,
-                            out SavedBoxData saved) &&
-                    saved != null &&
-                    saved.Dates != null &&
-                    saved.Dates.Count > 0 &&
-                    (saved.ProductId <= 0 ||
-                     saved.ProductId == productId))
-                {
-                    if (!ExpirationSaveManager
-                            .runtimeBoxDatesFromSave
-                            .TryGetValue(
-                                boxKey,
-                                out bool alreadyFromSave) ||
-                        !alreadyFromSave)
-                    {
-                        ExpirationSaveManager
-                            .runtimeBoxDates[boxKey] =
-                            new List<int>(saved.Dates);
-
-                        int savedDeliveryDay =
-                            saved.DeliveryDay > 0
-                                ? saved.DeliveryDay
-                                : 1;
-
-                        ExpirationSaveManager
-                            .runtimeBoxDeliveryDays[boxKey] =
-                            savedDeliveryDay;
-
-                        ExpirationSaveManager
-                            .runtimeBoxDatesFromSave[boxKey] =
-                            true;
-
-                        ExpirationSaveManager
-                            .boxDates[boxKey] =
-                            new List<int>(saved.Dates);
-
-                        ExpirationSaveManager
-                            .boxDeliveryDays[boxKey] =
-                            savedDeliveryDay;
-
-                        ExpirationSaveManager
-                            .boxDates[stableUid] =
-                            new List<int>(saved.Dates);
-
-                        ExpirationSaveManager
-                            .boxDeliveryDays[stableUid] =
-                            savedDeliveryDay;
-
-                        StatisticMod.Plugin.DebugLog(
-                            $"[BoxPatches] Preloaded PBOX2 during Box.AddProduct. " +
-                            $"uid={stableUid}, product={productId}, " +
-                            $"deliveryDay={savedDeliveryDay}, " +
-                            $"dates={saved.Dates.Count}");
-                    }
-
-                    if (currentCount < saved.Dates.Count)
-                    {
-                        dateToStore =
-                            saved.Dates[currentCount];
-
-                        restoredFromSave = true;
-                    }
-                }
-
-                // ======================================================
-                // 3. Runtime został już odtworzony z sejwa.
-                // Używamy dokładnej daty dla indeksu ładowanego produktu.
-                // ======================================================
-                if (dateToStore < 0 &&
-                    ExpirationSaveManager
-                        .runtimeBoxDatesFromSave
-                        .TryGetValue(
-                            boxKey,
-                            out bool fromSavedRuntime) &&
-                    fromSavedRuntime &&
+                // 1. During startup/reconstruction the exact PBOX3 pair is
+                //    authoritative. A transient ProductExpirationComponent may
+                //    already have been created earlier in the load sequence
+                //    with current-day metadata, so it must NOT override PBOX3.
+                if (hydratedKnownState &&
                     ExpirationSaveManager
                         .runtimeBoxDates
                         .TryGetValue(
-                            boxKey,
-                            out List<int> savedRuntimeDates) &&
-                    savedRuntimeDates != null &&
-                    currentCount < savedRuntimeDates.Count)
+                            runtimeKey,
+                            out List<int> savedDates) &&
+                    savedDates != null &&
+                    ExpirationSaveManager
+                        .runtimeBoxDeliveryDaysPerProduct
+                        .TryGetValue(
+                            runtimeKey,
+                            out List<int> savedDeliveries) &&
+                    savedDeliveries != null &&
+                    savedDates.Count == savedDeliveries.Count &&
+                    currentCount < savedDates.Count)
                 {
-                    dateToStore =
-                        savedRuntimeDates[currentCount];
+                    expirationDay =
+                        savedDates[currentCount];
 
-                    restoredFromSave = true;
+                    deliveryDay =
+                        ExpirationSaveManager
+                            .NormalizeDeliveryDay(
+                                productId,
+                                expirationDay,
+                                savedDeliveries[currentCount]);
+
                 }
 
-                // ======================================================
-                // 4. Naprawdę nowy produkt.
-                // Zawsze deterministycznie CurrentDay + shelfLife.
-                // ======================================================
-                if (dateToStore < 0)
+                // 2. Otherwise a transferred physical product is authoritative.
+                //    Shelf -> Box, Box -> Box, restocker etc.
+                if (expirationDay <= 0 &&
+                    comp != null &&
+                    comp.ExpirationDay > 0)
                 {
-                    try
-                    {
-                        CustomExpirationLoader.Load();
-                    }
-                    catch { }
+                    expirationDay =
+                        comp.ExpirationDay;
 
-                    int shelfLife = -1;
+                    deliveryDay =
+                        ExpirationSaveManager
+                            .NormalizeDeliveryDay(
+                                productId,
+                                expirationDay,
+                                comp.DeliveryDay);
 
-                    if (productId > 0)
-                    {
-                        int overrideDays =
-                            BoxLabelPatch.GetConfigOverrideDirectly(productId);
+                }
 
-                        if (overrideDays >= 0)
-                        {
-                            shelfLife = overrideDays;
+                // 3. Truly new physical product.
+                if (expirationDay <= 0)
+                {
+                    CustomExpirationLoader.Load();
 
-                            ExpirationSaveManager
-                                .runtimeBoxConfigVersion[boxKey] =
-                                CustomExpirationLoader.ConfigVersion;
-                        }
-                    }
+                    int shelfLife =
+                        BoxLabelPatch
+                            .GetConfigOverrideDirectly(
+                                productId);
 
                     if (shelfLife < 0)
                     {
                         shelfLife =
-                            ExpirationCalculator.GetDaysForProduct(
-                                null,
-                                productId);
-
-                        ExpirationSaveManager
-                            .runtimeBoxConfigVersion[boxKey] = -1;
+                            ExpirationCalculator
+                                .GetDaysForProduct(
+                                    null,
+                                    productId);
                     }
 
-                    var dcm =
-                        DayCycleManager.HasInstance
-                            ? DayCycleManager.Instance
-                            : null;
+                    deliveryDay =
+                        ExpirationSaveManager
+                            .GetCurrentDaySafe();
 
-                    int currentDay =
-                        dcm != null && dcm.CurrentDay > 0
-                            ? dcm.CurrentDay
-                            : 1;
+                    expirationDay =
+                        deliveryDay +
+                        shelfLife;
 
-                    dateToStore =
-                        currentDay + shelfLife;
-
-                    StatisticMod.Plugin.DebugLog(
-                        $"[BoxPatches] Assigned fresh deterministic date. " +
-                        $"product={productId}, currentDay={currentDay}, " +
-                        $"shelfLife={shelfLife}, expDay={dateToStore}, " +
-                        $"box={boxKey}");
                 }
 
-                if (dateToStore < 0)
-                    return;
-
-                // Każdy fizyczny Product dostaje swój dokładny komponent.
                 if (comp == null)
                 {
                     comp =
@@ -268,144 +170,106 @@ namespace SmartExpiration.Patches
                         HideFlags.HideInInspector;
                 }
 
-                comp.ProductID = productId;
-                comp.ExpirationDay = dateToStore;
+                comp.ProductID =
+                    productId;
+
+                comp.ExpirationDay =
+                    expirationDay;
+
+                comp.DeliveryDay =
+                    deliveryDay;
 
                 if (!ExpirationSaveManager
                         .runtimeBoxDates
                         .TryGetValue(
-                            boxKey,
+                            runtimeKey,
                             out List<int> dates) ||
                     dates == null)
                 {
-                    dates = new List<int>();
+                    dates =
+                        new List<int>();
 
                     ExpirationSaveManager
-                        .runtimeBoxDates[boxKey] = dates;
+                        .runtimeBoxDates[runtimeKey] =
+                        dates;
                 }
 
-                if (dates.Count > currentCount)
+                if (!ExpirationSaveManager
+                        .runtimeBoxDeliveryDaysPerProduct
+                        .TryGetValue(
+                            runtimeKey,
+                            out List<int> deliveries) ||
+                    deliveries == null)
+                {
+                    deliveries =
+                        new List<int>();
+
+                    ExpirationSaveManager
+                        .runtimeBoxDeliveryDaysPerProduct[runtimeKey] =
+                        deliveries;
+                }
+
+                // If PBOX3 hydrated the complete list, write exactly into the
+                // native insertion index. Otherwise append a new paired entry.
+                if (dates.Count > currentCount &&
+                    deliveries.Count > currentCount)
                 {
                     dates[currentCount] =
-                        dateToStore;
+                        expirationDay;
+
+                    deliveries[currentCount] =
+                        deliveryDay;
                 }
                 else
                 {
-                    if (dates.Count < currentCount)
-                    {
-                        // Fail-soft. Nie powinno wystąpić w normalnej ścieżce.
-                        int fallbackDate =
-                            dateToStore;
+                    // Fail-soft gap repair. Gaps should not happen in normal
+                    // Box.AddProduct order; use the exact current product pair
+                    // rather than inventing unrelated metadata.
+                    while (dates.Count < currentCount)
+                        dates.Add(expirationDay);
 
-                        try
-                        {
-                            int fallbackShelfLife =
-                                BoxLabelPatch.GetConfigOverrideDirectly(
-                                    productId);
+                    while (deliveries.Count < currentCount)
+                        deliveries.Add(deliveryDay);
 
-                            if (fallbackShelfLife < 0)
-                            {
-                                fallbackShelfLife =
-                                    ExpirationCalculator.GetDaysForProduct(
-                                        null,
-                                        productId);
-                            }
+                    if (dates.Count == currentCount)
+                        dates.Add(expirationDay);
 
-                            var fallbackDcm =
-                                DayCycleManager.HasInstance
-                                    ? DayCycleManager.Instance
-                                    : null;
-
-                            int fallbackDay =
-                                fallbackDcm != null &&
-                                fallbackDcm.CurrentDay > 0
-                                    ? fallbackDcm.CurrentDay
-                                    : 1;
-
-                            fallbackDate =
-                                fallbackDay + fallbackShelfLife;
-                        }
-                        catch { }
-
-                        while (dates.Count < currentCount)
-                            dates.Add(fallbackDate);
-                    }
-
-                    dates.Add(dateToStore);
+                    if (deliveries.Count == currentCount)
+                        deliveries.Add(deliveryDay);
                 }
 
-                var dayManager =
-                    DayCycleManager.HasInstance
-                        ? DayCycleManager.Instance
-                        : null;
+                // Lists must remain paired.
+                int pairedCount =
+                    Math.Min(
+                        dates.Count,
+                        deliveries.Count);
 
-                int today =
-                    dayManager != null &&
-                    dayManager.CurrentDay > 0
-                        ? dayManager.CurrentDay
-                        : 1;
+                while (dates.Count > pairedCount)
+                    dates.RemoveAt(dates.Count - 1);
 
-                bool runtimeIsFromSave =
-                    ExpirationSaveManager
+                while (deliveries.Count > pairedCount)
+                    deliveries.RemoveAt(deliveries.Count - 1);
+
+                if (!ExpirationSaveManager
                         .runtimeBoxDatesFromSave
-                        .TryGetValue(
-                            boxKey,
-                            out bool savedFlag) &&
-                    savedFlag;
-
-                if (restoredFromSave || runtimeIsFromSave)
+                        .ContainsKey(runtimeKey))
                 {
-                    // Niczego nie nadpisujemy.
-                    // runtimeBoxDeliveryDays został ustawiony z PBOX2.
-                }
-                else if (currentCount == 0)
-                {
-                    // Pierwszy produkt w naprawdę nowym / ponownie
-                    // napełnianym pustym kartonie = nowa dostawa.
                     ExpirationSaveManager
-                        .runtimeBoxDeliveryDays[boxKey] =
-                        today;
-
-                    ExpirationSaveManager
-                        .runtimeBoxDatesFromSave[boxKey] =
-                        false;
-
-                    ExpirationSaveManager
-                        .boxDeliveryDays[boxKey] =
-                        today;
-
-                    if (stableUid > 0)
-                    {
-                        ExpirationSaveManager
-                            .boxDeliveryDays[stableUid] =
-                            today;
-                    }
+                        .runtimeBoxDatesFromSave[runtimeKey] =
+                        hydratedKnownState;
                 }
-                else
-                {
-                    if (!ExpirationSaveManager
-                            .runtimeBoxDeliveryDays
-                            .ContainsKey(boxKey))
-                    {
-                        ExpirationSaveManager
-                            .runtimeBoxDeliveryDays[boxKey] =
-                            today;
-                    }
 
-                    if (!ExpirationSaveManager
-                            .runtimeBoxDatesFromSave
-                            .ContainsKey(boxKey))
-                    {
-                        ExpirationSaveManager
-                            .runtimeBoxDatesFromSave[boxKey] =
-                            false;
-                    }
-                }
+                ExpirationSaveManager
+                    .runtimeBoxConfigVersion[runtimeKey] =
+                    -1;
+
+                ExpirationSaveManager
+                    .TouchRuntimeBoxState(__instance);
             }
             catch (Exception ex)
             {
-                StatisticMod.Plugin.DebugLog(
-                    $"[BoxPatches] AddProduct_Prefix error: {ex.Message}");
+                StatisticMod.Plugin.DebugWarning(
+                    $"[PBOX3] AddProduct_Prefix error: {ex.Message}");
             }
         }
 
@@ -420,34 +284,64 @@ namespace SmartExpiration.Patches
                 if (__instance == null ||
                     __result == null)
                 {
-                    // Bardzo ważne:
-                    // jeśli gra zwróci null, NIE zużywamy terminu z listy.
+                    // Native GetProductFromBox can return null in special cases.
+                    // Never consume metadata when no physical product returned.
                     return;
                 }
 
-                int boxKey =
+                int runtimeKey =
                     __instance.GetInstanceID();
+
+                ExpirationSaveManager
+                    .EnsureRuntimeBoxState(__instance);
 
                 if (!ExpirationSaveManager
                         .runtimeBoxDates
                         .TryGetValue(
-                            boxKey,
+                            runtimeKey,
                             out List<int> dates) ||
                     dates == null ||
-                    dates.Count <= 0)
+                    dates.Count == 0 ||
+                    !ExpirationSaveManager
+                        .runtimeBoxDeliveryDaysPerProduct
+                        .TryGetValue(
+                            runtimeKey,
+                            out List<int> deliveries) ||
+                    deliveries == null ||
+                    deliveries.Count == 0)
                 {
                     return;
                 }
 
-                // Zachowujemy tę samą semantykę kolejki co wcześniej,
-                // ale datę przypisujemy bezpośrednio do zwróconego Product.
-                int exactDate =
+                // Keep the existing queue semantics: the first metadata pair
+                // belongs to the physical product returned by the box.
+                int expirationDay =
                     dates[0];
 
+                int productId =
+                    ExpirationSaveManager
+                        .GetProductIdFromProduct(__result);
+
+                if (productId <= 0)
+                {
+                    productId =
+                        ExpirationSaveManager
+                            .GetBoxProductId(__instance);
+                }
+
+                int deliveryDay =
+                    ExpirationSaveManager
+                        .NormalizeDeliveryDay(
+                            productId,
+                            expirationDay,
+                            deliveries[0]);
+
                 dates.RemoveAt(0);
+                deliveries.RemoveAt(0);
 
                 var comp =
-                    __result.GetComponent<ProductExpirationComponent>();
+                    __result
+                        .GetComponent<ProductExpirationComponent>();
 
                 if (comp == null)
                 {
@@ -460,80 +354,36 @@ namespace SmartExpiration.Patches
                         HideFlags.HideInInspector;
                 }
 
-                int productId = 0;
-
-                try
-                {
-                    productId =
-                        ExpirationSaveManager
-                            .GetProductIdFromProduct(__result);
-                }
-                catch { }
-
-                if (productId <= 0 &&
-                    __instance.Data != null)
-                {
-                    try
-                    {
-                        productId =
-                            __instance.Data.ProductID;
-                    }
-                    catch { }
-                }
-
                 comp.ProductID =
                     productId;
 
                 comp.ExpirationDay =
-                    exactDate;
+                    expirationDay;
 
-                StatisticMod.Plugin.DebugLog(
-                    $"[BoxPatches] Attached exact box date {exactDate} " +
-                    $"to returned product {productId} from box {boxKey}");
+                comp.DeliveryDay =
+                    deliveryDay;
 
-                // Czyścimy tylko pustą listę runtime.
-                // Sam Product niesie już datę do półki.
-                if (dates.Count == 0)
+
+                if (dates.Count == 0 ||
+                    deliveries.Count == 0)
+                {
+                    // An empty box owns no delivery history. When it is filled
+                    // later, metadata comes from the inserted Product.
+                    ExpirationSaveManager
+                        .RemoveRuntimeBoxInstance(
+                            __instance,
+                            true);
+                }
+                else
                 {
                     ExpirationSaveManager
-                        .runtimeBoxDates
-                        .Remove(boxKey);
-
-                    ExpirationSaveManager
-                        .runtimeBoxDeliveryDays
-                        .Remove(boxKey);
-
-                    ExpirationSaveManager
-                        .runtimeBoxDatesFromSave
-                        .Remove(boxKey);
-
-                    ExpirationSaveManager
-                        .runtimeBoxConfigVersion
-                        .Remove(boxKey);
-
-                    // Karton jest pusty. Trwały cache poprzedniej dostawy
-                    // nie może zostać użyty, gdy karton zostanie później
-                    // napełniony nowym towarem.
-                    int stableUid =
-                        ExpirationSaveManager
-                            .GetStableBoxUid(__instance);
-
-                    if (stableUid > 0)
-                    {
-                        ExpirationSaveManager
-                            .boxDates
-                            .Remove(stableUid);
-
-                        ExpirationSaveManager
-                            .boxDeliveryDays
-                            .Remove(stableUid);
-                    }
+                        .TouchRuntimeBoxState(__instance);
                 }
             }
             catch (Exception ex)
             {
-                StatisticMod.Plugin.DebugLog(
-                    $"[BoxPatches] GetProductFromBox_Postfix error: {ex.Message}");
+                StatisticMod.Plugin.DebugWarning(
+                    $"[PBOX3] GetProductFromBox_Postfix error: {ex.Message}");
             }
         }
     }

@@ -1,0 +1,28 @@
+PBOX3 FORMAT
+============
+
+PBOX3 fields:
+0  PBOX3
+1  Stats&Expiry persistent GUID
+2  Box.BoxID
+3  ProductID
+4  position.x
+5  position.y
+6  position.z
+7  rotation.x
+8  rotation.y
+9  rotation.z
+10 rotation.w
+11 ExpirationDays CSV
+12 DeliveryDays CSV
+
+Invariant:
+len(ExpirationDays) == len(DeliveryDays) == Box.ProductCount
+
+Game Box.Data.UID is intentionally NOT persisted in this record.
+
+Shelf delivery metadata:
+SDEL|DisplaySlotPath|DeliveryDays CSV
+
+Old shelf expiration format remains:
+DisplaySlotPath|ExpirationDays CSV

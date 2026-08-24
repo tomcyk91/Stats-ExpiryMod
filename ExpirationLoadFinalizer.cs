@@ -10,7 +10,7 @@ namespace SmartExpiration
         private const float MaxWaitSeconds = 10f;
         private const float InitialSceneDelay = 0.50f;
         private const float EmptySceneRetryDelay = 0.50f;
-        private const int MaxEmptySceneRetries = 6;
+        private const int MaxEmptySceneRetries = 180; // 90 s przy 0.5 s; ciężkie zestawy modów potrafią ładować długo
         private const double MaxSyncBudgetMsPerFrame = 0.30;
 
         private static bool _syncInProgress;
@@ -27,12 +27,12 @@ namespace SmartExpiration
         {
             if (_syncInProgress)
             {
-                StatisticMod.Plugin.DebugLog("[DelayedSync] Synchronization already running - duplicate request skipped.");
                 yield break;
             }
 
             _syncInProgress = true;
             InitialSyncComplete = false;
+            bool completedSuccessfully = false;
 
             try
             {
@@ -53,14 +53,54 @@ namespace SmartExpiration
 
                 DisplaySlot[] allSlots = GetCurrentSlots(true);
                 int retry = 0;
-                while ((allSlots == null || allSlots.Length == 0) && retry < MaxEmptySceneRetries)
+
+                // ApplySaveData kończy się jeszcze w Main Menu. Nie wolno
+                // uznać synchronizacji za zakończoną tylko dlatego, że
+                // sidecar został już wczytany. Czekamy na fizyczne obiekty
+                // właściwej sceny gry.
+                while ((allSlots == null || allSlots.Length == 0) &&
+                       retry < MaxEmptySceneRetries)
                 {
                     retry++;
                     yield return new WaitForSecondsRealtime(EmptySceneRetryDelay);
                     allSlots = GetCurrentSlots(true);
                 }
 
-                if (allSlots == null) allSlots = new DisplaySlot[0];
+                if (allSlots == null || allSlots.Length == 0)
+                {
+                    StatisticMod.Plugin.Log.LogWarning(
+                        "[DelayedSync] Gameplay DisplaySlots were not found before timeout. " +
+                        "Expiration sidecar writes remain BLOCKED to protect existing PBOX3 data.");
+
+                    yield break;
+                }
+
+                // PBOX3 is restored by the saved physical fingerprint
+                // (box type + transform + product/count), never by game UID.
+                int restoredBoxes =
+                    ExpirationSaveManager.RestoreLoadedBoxesFromPbox3();
+
+                try
+                {
+                    var labels =
+                        SmartExpiration.Patches.BoxLabelPatch.AllLabels;
+
+                    if (labels != null)
+                    {
+                        for (int i = 0; i < labels.Count; i++)
+                        {
+                            var label = labels[i];
+                            if (label != null)
+                                label.ForceRefreshAfterPbox3Restore();
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    StatisticMod.Plugin.DebugWarning(
+                        $"[DelayedSync] Box label refresh error: {ex.Message}");
+                }
+
 
                 int slotsPerFrame = 2;
                 try
@@ -114,18 +154,73 @@ namespace SmartExpiration
                 // wykonuje dodatkowego globalnego skanu półek.
                 yield return ExpirationSafetyMigration.RunOnceCoroutine(allSlots);
 
-                // Reuse exactly this native-cache snapshot for marker initialization.
-                // No second scene search after startup synchronization.
+                // ExpiryRescueV3 reloads SmartExpiration.txt after a successful
+                // file rewrite. LoadData() intentionally clears runtime caches,
+                // so on the rare first migration run we must apply PBOX3/SDEL
+                // once more before writes are enabled.
+                if (ExpirationSafetyMigration.ReloadedSidecarThisRun)
+                {
+                    int restoredAfterMigration =
+                        ExpirationSaveManager.RestoreLoadedBoxesFromPbox3();
+
+                    for (int i = 0; i < allSlots.Length; i++)
+                    {
+                        DisplaySlot slot = allSlots[i];
+                        if (slot == null)
+                            continue;
+
+                        bool hasProductAfterMigration = false;
+                        try { hasProductAfterMigration = slot.HasProduct; } catch { }
+
+                        if (!hasProductAfterMigration)
+                            continue;
+
+                        try
+                        {
+                            ExpirationManager.SyncShelf(slot);
+                            LabelExclamationOverlay.QueueSlot(slot);
+                        }
+                        catch (Exception ex)
+                        {
+                            StatisticMod.Plugin.DebugWarning(
+                                $"[DelayedSync] Post-migration SyncShelf error: {ex.Message}");
+                        }
+                    }
+
+                    try
+                    {
+                        var labels =
+                            SmartExpiration.Patches.BoxLabelPatch.AllLabels;
+
+                        if (labels != null)
+                        {
+                            for (int i = 0; i < labels.Count; i++)
+                            {
+                                var label = labels[i];
+                                if (label != null)
+                                    label.ForceRefreshAfterPbox3Restore();
+                            }
+                        }
+                    }
+                    catch { }
+
+                }
+
+                // Dopiero po rzeczywistym odtworzeniu sceny zezwalamy
+                // SaveData() na zapis SmartExpiration.txt.
+                completedSuccessfully = true;
                 InitialSyncComplete = true;
-                StatisticMod.Plugin.DebugLog(
-                    $"[DelayedSync] DONE. scanned={scanned}, occupied={occupied}, errors={errors}, " +
-                    $"batch={slotsPerFrame}, budget={MaxSyncBudgetMsPerFrame:F2}ms");
             }
             finally
             {
                 _syncInProgress = false;
-                if (ExpirationSaveManager.SaveLoaded)
-                    InitialSyncComplete = true; // fail-soft: never block event-driven runtime forever
+
+                // Fail-CLOSED, nie fail-open. Jeżeli właściwa scena nie została
+                // zsynchronizowana, pozostawiamy zapis sidecara zablokowany.
+                // Lepszy brak aktualizacji sidecara w tej sesji niż utrata
+                // poprawnego PBOX3 przez zapis danych z Main Menu/load runtime.
+                if (!completedSuccessfully)
+                    InitialSyncComplete = false;
             }
         }
 

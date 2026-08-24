@@ -83,34 +83,91 @@ namespace SmartExpiration
             var comp =
                 product.GetComponent<ProductExpirationComponent>();
 
-            if (comp != null)
-                return;
-
+            // Saved shelf data is authoritative even if a transient component
+            // was created earlier during scene reconstruction.
             if (hasSavedData &&
                 savedDates != null &&
                 index >= 0 &&
                 index < savedDates.Count)
             {
-                comp =
-                    product.gameObject
-                        .AddComponent<ProductExpirationComponent>();
+                if (comp == null)
+                {
+                    comp =
+                        product.gameObject
+                            .AddComponent<ProductExpirationComponent>();
 
-                comp.hideFlags =
-                    HideFlags.DontSave |
-                    HideFlags.HideInInspector;
+                    comp.hideFlags =
+                        HideFlags.DontSave |
+                        HideFlags.HideInInspector;
+                }
+
+                int productId =
+                    slot != null
+                        ? slot.ProductID
+                        : ExpirationSaveManager.GetProductIdFromProduct(product);
+
+                int expirationDay =
+                    savedDates[index];
+
+                int deliveryDay = 0;
+
+                if (slot != null)
+                {
+                    string path =
+                        ExpirationSaveManager.GetSlotPath(slot);
+
+                    if (ExpirationSaveManager
+                            .slotDeliveryDays
+                            .TryGetValue(
+                                path,
+                                out List<int> savedDeliveries) &&
+                        savedDeliveries != null &&
+                        index < savedDeliveries.Count)
+                    {
+                        deliveryDay =
+                            savedDeliveries[index];
+                    }
+                }
 
                 comp.ProductID =
-                    slot.ProductID;
+                    productId;
 
                 comp.ExpirationDay =
-                    savedDates[index];
+                    expirationDay;
+
+                comp.DeliveryDay =
+                    ExpirationSaveManager.NormalizeDeliveryDay(
+                        productId,
+                        expirationDay,
+                        deliveryDay);
+
+                return;
             }
-            else
+
+            if (comp != null)
             {
-                EnsureExpiration(
-                    product,
-                    slot);
+                int productId =
+                    comp.ProductID > 0
+                        ? comp.ProductID
+                        : (slot != null
+                            ? slot.ProductID
+                            : ExpirationSaveManager.GetProductIdFromProduct(product));
+
+                comp.ProductID =
+                    productId;
+
+                comp.DeliveryDay =
+                    ExpirationSaveManager.NormalizeDeliveryDay(
+                        productId,
+                        comp.ExpirationDay,
+                        comp.DeliveryDay);
+
+                return;
             }
+
+            EnsureExpiration(
+                product,
+                slot);
         }
 
         public static void SyncShelf(
@@ -185,17 +242,6 @@ namespace SmartExpiration
             var comp =
                 product.GetComponent<ProductExpirationComponent>();
 
-            if (comp != null)
-                return comp;
-
-            comp =
-                product.gameObject
-                    .AddComponent<ProductExpirationComponent>();
-
-            comp.hideFlags =
-                HideFlags.DontSave |
-                HideFlags.HideInInspector;
-
             int productId =
                 slot != null
                     ? slot.ProductID
@@ -212,41 +258,47 @@ namespace SmartExpiration
                 catch { }
             }
 
+            if (comp != null)
+            {
+                if (comp.ProductID <= 0)
+                    comp.ProductID = productId;
+
+                comp.DeliveryDay =
+                    ExpirationSaveManager.NormalizeDeliveryDay(
+                        productId,
+                        comp.ExpirationDay,
+                        comp.DeliveryDay);
+
+                return comp;
+            }
+
+            comp =
+                product.gameObject
+                    .AddComponent<ProductExpirationComponent>();
+
+            comp.hideFlags =
+                HideFlags.DontSave |
+                HideFlags.HideInInspector;
+
             comp.ProductID =
                 productId;
 
-            // =========================================================
-            // Brak ClipboardDate i brak odczytu "pierwszej daty" z
-            // przypadkowego rodzica Box.
-            //
-            // Produkt wyjęty z kartonu dostaje swój dokładny termin już
-            // w BoxPatches.GetProductFromBox_Postfix.
-            //
-            // Jeżeli trafiamy tutaj bez ProductExpirationComponent,
-            // traktujemy obiekt jako naprawdę nowy produkt.
-            // =========================================================
-
-            // Jedyna ścieżka dla naprawdę NOWEGO produktu:
-            // bieżący dzień + stała wartość z cfg/calculator.
+            // A genuinely new physical product receives both pieces of metadata.
+            // DeliveryDay never comes from the cardboard box.
             int currentDay =
-                DayCycleManager.HasInstance &&
-                DayCycleManager.Instance != null &&
-                DayCycleManager.Instance.CurrentDay > 0
-                    ? DayCycleManager.Instance.CurrentDay
-                    : 1;
+                ExpirationSaveManager.GetCurrentDaySafe();
 
             int shelfLife =
                 ExpirationCalculator.GetDaysForProduct(
                     slot,
                     productId);
 
+            comp.DeliveryDay =
+                currentDay;
+
             comp.ExpirationDay =
                 currentDay + shelfLife;
 
-            StatisticMod.Plugin.DebugLog(
-                $"[EnsureExpiration] Fresh deterministic date: " +
-                $"product={productId}, day={currentDay}, " +
-                $"shelfLife={shelfLife}, exp={comp.ExpirationDay}");
 
             return comp;
         }
@@ -269,6 +321,12 @@ namespace SmartExpiration
                         ? count
                         : 0);
 
+            List<int> currentDeliveries =
+                new List<int>(
+                    count > 0
+                        ? count
+                        : 0);
+
             if (count > 0)
             {
                 for (int i = 0;
@@ -286,11 +344,28 @@ namespace SmartExpiration
                     var comp =
                         p.GetComponent<ProductExpirationComponent>();
 
-                    if (comp != null)
+                    if (comp == null)
                     {
-                        currentDates.Add(
-                            comp.ExpirationDay);
+                        comp =
+                            EnsureExpiration(
+                                p,
+                                slot);
                     }
+
+                    if (comp == null)
+                        continue;
+
+                    comp.DeliveryDay =
+                        ExpirationSaveManager.NormalizeDeliveryDay(
+                            slot.ProductID,
+                            comp.ExpirationDay,
+                            comp.DeliveryDay);
+
+                    currentDates.Add(
+                        comp.ExpirationDay);
+
+                    currentDeliveries.Add(
+                        comp.DeliveryDay);
                 }
             }
             else if (slot.HasProduct)
@@ -312,17 +387,38 @@ namespace SmartExpiration
                     var comp =
                         p.GetComponent<ProductExpirationComponent>();
 
-                    if (comp != null)
+                    if (comp == null)
                     {
-                        currentDates.Add(
-                            comp.ExpirationDay);
+                        comp =
+                            EnsureExpiration(
+                                p,
+                                slot);
                     }
+
+                    if (comp == null)
+                        continue;
+
+                    comp.DeliveryDay =
+                        ExpirationSaveManager.NormalizeDeliveryDay(
+                            slot.ProductID,
+                            comp.ExpirationDay,
+                            comp.DeliveryDay);
+
+                    currentDates.Add(
+                        comp.ExpirationDay);
+
+                    currentDeliveries.Add(
+                        comp.DeliveryDay);
                 }
             }
 
             ExpirationSaveManager
                 .slotDates[path] =
                 currentDates;
+
+            ExpirationSaveManager
+                .slotDeliveryDays[path] =
+                currentDeliveries;
         }
 
         public static void RecordProductAdded(
@@ -343,22 +439,43 @@ namespace SmartExpiration
                 return;
             }
 
+            comp.DeliveryDay =
+                ExpirationSaveManager.NormalizeDeliveryDay(
+                    slot.ProductID,
+                    comp.ExpirationDay,
+                    comp.DeliveryDay);
+
             string path =
                 ExpirationSaveManager.GetSlotPath(slot);
 
             int count =
                 GetProductCount(slot);
 
-            if (ExpirationSaveManager
+            bool datesOk =
+                ExpirationSaveManager
                     .slotDates
                     .TryGetValue(
                         path,
                         out List<int> dates) &&
                 dates != null &&
-                dates.Count == count - 1)
+                dates.Count == count - 1;
+
+            bool deliveriesOk =
+                ExpirationSaveManager
+                    .slotDeliveryDays
+                    .TryGetValue(
+                        path,
+                        out List<int> deliveries) &&
+                deliveries != null &&
+                deliveries.Count == count - 1;
+
+            if (datesOk && deliveriesOk)
             {
                 dates.Add(
                     comp.ExpirationDay);
+
+                deliveries.Add(
+                    comp.DeliveryDay);
             }
             else
             {
@@ -381,16 +498,31 @@ namespace SmartExpiration
             int count =
                 GetProductCount(slot);
 
-            if (ExpirationSaveManager
+            bool datesOk =
+                ExpirationSaveManager
                     .slotDates
                     .TryGetValue(
                         path,
                         out List<int> dates) &&
                 dates != null &&
-                dates.Count == count + 1)
+                dates.Count == count + 1;
+
+            bool deliveriesOk =
+                ExpirationSaveManager
+                    .slotDeliveryDays
+                    .TryGetValue(
+                        path,
+                        out List<int> deliveries) &&
+                deliveries != null &&
+                deliveries.Count == count + 1;
+
+            if (datesOk && deliveriesOk)
             {
                 dates.RemoveAt(
                     dates.Count - 1);
+
+                deliveries.RemoveAt(
+                    deliveries.Count - 1);
             }
             else
             {
@@ -625,45 +757,72 @@ namespace SmartExpiration
             int lastDate =
                 lastComp.ExpirationDay;
 
-            // Zamiana WYŁĄCZNIE terminów.
-            // Fizyczne Product GameObjecty pozostają na swoich miejscach.
+            int earliestDelivery =
+                ExpirationSaveManager.NormalizeDeliveryDay(
+                    slot.ProductID,
+                    earliestComp.ExpirationDay,
+                    earliestComp.DeliveryDay);
+
+            int lastDelivery =
+                ExpirationSaveManager.NormalizeDeliveryDay(
+                    slot.ProductID,
+                    lastComp.ExpirationDay,
+                    lastComp.DeliveryDay);
+
+            // FEFO swaps the complete metadata pair.
+            // Physical Product GameObjects remain in their native positions.
             lastComp.ExpirationDay =
                 earliestDate;
+
+            lastComp.DeliveryDay =
+                earliestDelivery;
 
             earliestComp.ExpirationDay =
                 lastDate;
 
-            // Pamięć slotu musi odzwierciedlać ten sam swap,
-            // aby zapis i RecordProductRemoved() były zgodne.
+            earliestComp.DeliveryDay =
+                lastDelivery;
+
             string path =
                 ExpirationSaveManager.GetSlotPath(slot);
 
-            if (ExpirationSaveManager
+            bool datesOk =
+                ExpirationSaveManager
                     .slotDates
                     .TryGetValue(
                         path,
                         out List<int> dates) &&
                 dates != null &&
-                dates.Count == count)
+                dates.Count == count;
+
+            bool deliveriesOk =
+                ExpirationSaveManager
+                    .slotDeliveryDays
+                    .TryGetValue(
+                        path,
+                        out List<int> deliveryDays) &&
+                deliveryDays != null &&
+                deliveryDays.Count == count;
+
+            if (datesOk && deliveriesOk)
             {
                 dates[earliestIndex] =
                     lastDate;
 
                 dates[lastIndex] =
                     earliestDate;
+
+                deliveryDays[earliestIndex] =
+                    lastDelivery;
+
+                deliveryDays[lastIndex] =
+                    earliestDelivery;
             }
             else
             {
-                // Fail-soft przy niespójnym cache.
                 UpdateMemory(slot);
             }
 
-            StatisticMod.Plugin.DebugLog(
-                $"[FEFO] Prepared shelf take: " +
-                $"product={slot.ProductID}, " +
-                $"earliestDate={earliestDate}, " +
-                $"sourceIndex={earliestIndex}, " +
-                $"nativeTakeIndex={lastIndex}");
 
             return true;
         }
@@ -758,28 +917,64 @@ namespace SmartExpiration
                 int lastDate =
                     lastComp.ExpirationDay;
 
+                int expiredDelivery =
+                    ExpirationSaveManager.NormalizeDeliveryDay(
+                        slot.ProductID,
+                        expiredComp.ExpirationDay,
+                        expiredComp.DeliveryDay);
+
+                int lastDelivery =
+                    ExpirationSaveManager.NormalizeDeliveryDay(
+                        slot.ProductID,
+                        lastComp.ExpirationDay,
+                        lastComp.DeliveryDay);
+
                 lastComp.ExpirationDay =
                     expirationDay;
+
+                lastComp.DeliveryDay =
+                    expiredDelivery;
 
                 expiredComp.ExpirationDay =
                     lastDate;
 
+                expiredComp.DeliveryDay =
+                    lastDelivery;
+
                 string path =
                     ExpirationSaveManager.GetSlotPath(slot);
 
-                if (ExpirationSaveManager
+                bool datesOk =
+                    ExpirationSaveManager
                         .slotDates
                         .TryGetValue(
                             path,
                             out List<int> dates) &&
                     dates != null &&
-                    dates.Count == count)
+                    dates.Count == count;
+
+                bool deliveriesOk =
+                    ExpirationSaveManager
+                        .slotDeliveryDays
+                        .TryGetValue(
+                            path,
+                            out List<int> deliveryDays) &&
+                    deliveryDays != null &&
+                    deliveryDays.Count == count;
+
+                if (datesOk && deliveriesOk)
                 {
                     dates[expiredIndex] =
                         lastDate;
 
                     dates[lastIndex] =
                         expirationDay;
+
+                    deliveryDays[expiredIndex] =
+                        lastDelivery;
+
+                    deliveryDays[lastIndex] =
+                        expiredDelivery;
                 }
                 else
                 {

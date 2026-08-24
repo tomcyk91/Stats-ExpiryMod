@@ -1,0 +1,18 @@
+Stats & Expiration Mod — PBOX3 Update
+
+- Reworked box expiration persistence to eliminate incorrect dates after restarting the game.
+- Replaced persistent reliance on the game's Box UID with the new PBOX3 system.
+- Box expiration data is now matched using Stats & Expiration's own persistent identity and box fingerprint.
+- Delivery day is now stored per individual product instead of per box.
+- Moving an older product into a newly created empty box now correctly preserves the product's original delivery day and expiration date.
+- Boxes can now safely contain products from multiple delivery batches.
+- Box labels display the delivery day associated with the product batch that expires first.
+- Added persistent shelf delivery-day metadata so products keep their original delivery information when moved between shelves and boxes.
+- Updated FEFO handling so expiration day and delivery day always move together.
+- Improved compatibility with mods that create, rebuild, or refill boxes, including Box Spawner / Warehouse Refill style workflows.
+- Added automatic migration support from PBOX2/PBOX saves to PBOX3.
+- Added an automatic pre-PBOX3 backup of SmartExpiration.txt before the first migration write.
+- Unmatched legacy/PBOX3 records are preserved rather than silently discarded.
+- Retained startup save protection to prevent SmartExpiration.txt from being overwritten before the save data is fully loaded.
+- Retained the one-time expiration safety migration for saves affected by older incorrect expiration data.
+- Removed verbose development/debug logging from the release build.

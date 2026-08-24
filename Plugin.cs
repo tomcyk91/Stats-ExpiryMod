@@ -11,7 +11,7 @@ using SmartExpiration.Patches;
 
 namespace StatisticMod
 {
-    [BepInPlugin("StatsandExpiryMod", "Stats & Expiration Mod", "2.4.4")]
+    [BepInPlugin("StatsandExpiryMod", "Stats & Expiration Mod", "2.4.5")]
     public class Plugin : BasePlugin
     {
         // Zachowane dla kompatybilności z wcześniejszym kodem moda.
@@ -80,7 +80,7 @@ namespace StatisticMod
             Log = base.Log;
             ModLocalization.Initialize();
             SmartExpiration.SEProfiler.Init();
-            Log.LogInfo("[Supermarket Overhaul] Starting loading mod (Stats + Expiration) v2.4.3 PERF2...");
+            Log.LogInfo("[Supermarket Overhaul] Starting loading mod (Stats + Expiration) v2.4.5 PERF2...");
 
             try
             {
